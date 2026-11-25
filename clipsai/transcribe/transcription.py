@@ -494,23 +494,36 @@ class Transcription:
             logging.error(err)
             raise TranscriptionError(err)
 
-        left, right = 0, len(transcript_info) - 1
+        # WhisperX leaves start/end as None on characters it does not align
+        # (spaces, most notably). Search only timed entries and map the result
+        # back to the original index so a single None cannot break the compare.
+        timed = [
+            (i, info["start_time"], info["end_time"])
+            for i, info in enumerate(transcript_info)
+            if info.get("start_time") is not None
+            and info.get("end_time") is not None
+        ]
+        if not timed:
+            return 0
+
+        left, right = 0, len(timed) - 1
         while left <= right:
             mid = left + (right - left) // 2
-            start_time = transcript_info[mid]["start_time"]
-            end_time = transcript_info[mid]["end_time"]
+            _, start_time, end_time = timed[mid]
 
             if start_time <= target_time <= end_time:
-                return mid
+                return timed[mid][0]
             elif target_time > end_time:
                 left = mid + 1
             elif target_time < start_time:
                 right = mid - 1
 
         if type_of_time == "start":
-            return left - 1 if left == len(transcript_info) else left
+            position = left - 1 if left == len(timed) else left
+            return timed[max(0, position)][0]
         else:
-            return right + 1 if right == -1 else right
+            position = right + 1 if right == -1 else right
+            return timed[min(len(timed) - 1, position)][0]
 
     def _init_from_json_file(self, json_file: JSONFile) -> None:
         """
