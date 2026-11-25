@@ -420,7 +420,7 @@
 						{#if rendering}
 							<div class="progress"><span style="width: {rendering.progress * 100}%"></span></div>
 							<p class="render-note mono">
-								{rendering.progress * 100}% · worker thread
+								{Math.round(rendering.progress * 100)}% · worker thread
 								{#if queued > 0} · {queued} queued{/if}
 							</p>
 						{:else if queued > 0}

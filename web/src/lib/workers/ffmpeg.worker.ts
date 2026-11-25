@@ -1,4 +1,4 @@
-import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { FFmpeg, FFFSType } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
 import type { TrimOptions } from '../video';
 
@@ -68,7 +68,7 @@ function filtersFor({ look, aspect }: TrimOptions): string[] {
 	return filters;
 }
 
-async function ensureEngine(id: number): Promise<FFmpeg> {
+async function ensureEngine(): Promise<FFmpeg> {
 	if (engine?.loaded) return engine;
 
 	if (!loading) {
@@ -103,24 +103,42 @@ async function ensureEngine(id: number): Promise<FFmpeg> {
 			});
 	}
 
-	const instance = await loading;
-	post({ id, type: 'loaded' });
-	return instance;
+	return await loading;
 }
 
 async function render(id: number, file: File, options: TrimOptions): Promise<void> {
-	const ffmpeg = await ensureEngine(id);
+	const ffmpeg = await ensureEngine();
 	activeId = id;
 	post({ id, type: 'start' });
 
-	const input = `input-${id}`;
+	const mountDir = `/work-${id}`;
+	const fallbackInput = `input-${id}`;
 	const output = `output-${id}.mp4`;
 	const duration = Math.max(0.05, options.end - options.start);
 	const filters = filtersFor(options);
 	activeDuration = duration;
 
+	let input = fallbackInput;
+	let mounted = false;
+	let wroteInput = false;
+
 	try {
-		await ffmpeg.writeFile(input, await fetchFile(file));
+		try {
+			await ffmpeg.createDir(mountDir);
+			const useDirectFile = Boolean(file.name) && !file.name.includes('/');
+			const entryName = useDirectFile ? file.name : 'source';
+			const mountData = useDirectFile
+				? { files: [file] }
+				: { blobs: [{ name: entryName, data: file }] };
+			await ffmpeg.mount(FFFSType.WORKERFS, mountData, mountDir);
+			input = `${mountDir}/${entryName}`;
+			mounted = true;
+		} catch {
+			await ffmpeg.deleteDir(mountDir).catch(() => undefined);
+			await ffmpeg.writeFile(fallbackInput, await fetchFile(file));
+			input = fallbackInput;
+			wroteInput = true;
+		}
 
 		const args = [
 			'-hide_banner',
@@ -176,7 +194,13 @@ async function render(id: number, file: File, options: TrimOptions): Promise<voi
 		post({ id, type: 'done', buffer, mimeType: 'video/mp4' }, [buffer]);
 	} finally {
 		activeId = null;
-		await ffmpeg.deleteFile(input).catch(() => undefined);
+		if (mounted) {
+			await ffmpeg.unmount(mountDir).catch(() => undefined);
+			await ffmpeg.deleteDir(mountDir).catch(() => undefined);
+		}
+		if (wroteInput) {
+			await ffmpeg.deleteFile(fallbackInput).catch(() => undefined);
+		}
 		await ffmpeg.deleteFile(output).catch(() => undefined);
 	}
 }
@@ -188,7 +212,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 	try {
 		switch (message.type) {
 			case 'load':
-				await ensureEngine(message.id);
+				await ensureEngine();
 				post({ id: message.id, type: 'loaded' });
 				break;
 			case 'render':

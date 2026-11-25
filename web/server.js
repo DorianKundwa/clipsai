@@ -25,7 +25,14 @@ const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? '127.0.0.1';
 
 const server = createServer((request, response) => {
-	request.headers['x-clipsai-protocol'] = request.socket.encrypted ? 'https' : 'http';
+	const forwardedProto = request.headers['x-forwarded-proto'];
+	const proto =
+		typeof forwardedProto === 'string' && forwardedProto
+			? forwardedProto.split(',')[0].trim()
+			: request.socket.encrypted
+				? 'https'
+				: 'http';
+	request.headers['x-clipsai-protocol'] = proto;
 
 	for (const [name, value] of Object.entries(isolationHeaders)) {
 		response.setHeader(name, value);

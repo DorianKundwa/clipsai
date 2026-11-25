@@ -333,11 +333,15 @@ function collectLinks(node: unknown, found: string[] = []): string[] {
 
 async function uploadStream(uploadUrl: string, upload: ClipUpload): Promise<void> {
 	let response: Response;
+	const headers: Record<string, string> = { 'Content-Type': upload.mimeType };
+	if (Number.isFinite(upload.size) && upload.size > 0) {
+		headers['Content-Length'] = String(upload.size);
+	}
 	try {
 		response = await fetch(uploadUrl, {
 			method: 'PUT',
 			// The signed URL is pre-authorized: no Bearer header here.
-			headers: { 'Content-Type': upload.mimeType },
+			headers,
 			// Streaming needs half-duplex; the bytes are forwarded as they arrive
 			// instead of being copied into a second buffer.
 			body: upload.stream,

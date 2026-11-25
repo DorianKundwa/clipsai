@@ -350,15 +350,36 @@ def run_all(
         raise _error("Pipeline", exc)
 
 
+def reset_job(job_id):
+    store = _jobs()
+    job = store.get(job_id) if job_id else None
+    if job is not None:
+        job.reset()
+    return (
+        "",
+        "Started a fresh job. Run a stage to begin.",
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        gr.update(choices=["Transcribe"], value="Transcribe"),
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Services
 # --------------------------------------------------------------------------- #
 def services_markdown() -> str:
-    from clipsai.config import AISettings, IndiePostSettings, huggingface_token
+    from clipsai.config import AISettings, IndiePostSettings, huggingface_token, load_env
+
+    env_file = BASE_DIR / ".env"
+    if env_file.is_file():
+        load_env(env_file, override=True)
 
     ai = AISettings.from_env()
     indiepost = IndiePostSettings.from_env()
-    env_file = BASE_DIR / ".env"
     lines = ["### Services"]
     lines.append(
         "- **DeepSeek:** {} · model `{}` · `{}`".format(
@@ -576,6 +597,7 @@ def build_ui() -> gr.Blocks:
                         with gr.Row():
                             run_step_btn = gr.Button("Run next step", variant="primary")
                             run_all_btn = gr.Button("Run all enabled stages")
+                            reset_btn = gr.Button("New job")
                         next_step = gr.Radio(
                             label="Next step",
                             choices=["Transcribe"],
@@ -629,6 +651,11 @@ def build_ui() -> gr.Blocks:
                 run_all_btn.click(
                     run_all,
                     inputs=pipeline_inputs,
+                    outputs=pipeline_outputs,
+                )
+                reset_btn.click(
+                    reset_job,
+                    inputs=[job_state],
                     outputs=pipeline_outputs,
                 )
 

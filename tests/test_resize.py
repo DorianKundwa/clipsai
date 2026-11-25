@@ -272,3 +272,27 @@ def test_merge_identical_segments(segments, expected):
     resizer = Resizer()
     merged_segments = resizer._merge_identical_segments(segments, mock_video_file)
     assert merged_segments == expected
+
+
+def test_calc_crop_clamps_to_frame_bounds():
+    resizer = Resizer()
+    crop = resizer._calc_crop(
+        Rect(800, 600, 100, 100),
+        resize_width=400,
+        resize_height=400,
+        video_width=1000,
+        video_height=800,
+    )
+    assert crop.x + crop.width <= 1000
+    assert crop.y + crop.height <= 800
+
+
+def test_merge_scene_change_and_speaker_segments_handles_empty_speakers():
+    resizer = Resizer()
+    assert resizer._merge_scene_change_and_speaker_segments([], [1.0, 2.0], 1.0) == []
+    merged = resizer._merge_scene_change_and_speaker_segments(
+        [{"speakers": [0], "start_time": 0.0, "end_time": 10.0}],
+        [0.0, 20.0],
+        scene_merge_threshold=1.0,
+    )
+    assert merged == [{"speakers": [0], "start_time": 0.0, "end_time": 10.0}]

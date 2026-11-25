@@ -184,3 +184,60 @@ def test_get_char_info_ignores_untimed_characters():
     # a range past the untimed space resolves without a TypeError
     assert "".join(c["char"] for c in transcription.get_char_info(1.0, 1.5)) == "yo"
     assert transcription.find_char_index(1.0, "start") >= 3
+
+
+def test_transcription_sentences_word_info_and_roundtrip(tmp_path):
+    data = {
+        "source_software": "TestSoftware",
+        "time_created": datetime.now(),
+        "language": "en",
+        "num_speakers": 1,
+        "char_info": [
+            {"char": "H", "start_time": 0.0, "end_time": 0.2, "speaker": 0},
+            {"char": "i", "start_time": 0.2, "end_time": 0.4, "speaker": 0},
+            {"char": "!", "start_time": 0.4, "end_time": 0.6, "speaker": 0},
+            {"char": " ", "start_time": None, "end_time": None, "speaker": 0},
+        ],
+    }
+    transcription = Transcription(data)
+    assert [s.text for s in transcription.sentences] == ["Hi!"]
+    words = transcription.get_word_info()
+    assert [w["word"] for w in words] == ["Hi!"]
+    chars = transcription.get_char_info()
+    assert chars[0]["word_index"] == 0
+    assert "work_index" not in chars[0]
+
+    out_path = tmp_path / "roundtrip.json"
+    saved_file = transcription.store_as_json_file(str(out_path))
+    reloaded = Transcription(saved_file)
+    assert reloaded.text == "Hi! "
+    assert [s.text for s in reloaded.sentences] == ["Hi!"]
+    assert reloaded.created_time.year >= 2020
+
+    empty = Transcription(
+        {
+            "source_software": "TestSoftware",
+            "time_created": datetime.now(),
+            "language": "en",
+            "num_speakers": None,
+            "char_info": [],
+        }
+    )
+    assert empty.end_time == 0.0
+    assert empty.get_word_info() == []
+
+
+def test_build_windows_and_find_clips_empty_sentences():
+    from clipsai.clip.clipfinder import ClipFinder
+
+    finder = ClipFinder()
+    empty_transcription = Transcription(
+        {
+            "source_software": "TestSoftware",
+            "time_created": datetime.now(),
+            "language": "en",
+            "num_speakers": None,
+            "char_info": [],
+        }
+    )
+    assert finder.find_clips(empty_transcription) == []

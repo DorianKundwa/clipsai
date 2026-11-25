@@ -159,6 +159,16 @@ class PipelineJob:
                 return self.trimmed[position]
         return ""
 
+    def _clean_video(self, index: int) -> str:
+        """Prefer un-hooked/un-captioned video for clean thumbnail frames."""
+        if index in self.selected:
+            position = self.selected.index(index)
+            if position < len(self.trimmed) and self.trimmed[position]:
+                return self.trimmed[position]
+        if index in self.reframed_by_index and self.reframed_by_index[index]:
+            return self.reframed_by_index[index]
+        return self._best_video(index)
+
     def _reset_outputs(self, stage: str, include_stage: bool = False) -> None:
         """Forget the artifacts of ``stage`` (optionally) and of every later stage.
 
@@ -460,6 +470,7 @@ class PipelineJob:
             record.update({"index": index, "package": package_path})
 
             video = self._best_video(index)
+            clean_video = self._clean_video(index)
             hook_text = metadata.get("hook") or metadata.get("title") or ""
 
             if self.config.hook and hook_text and video:
@@ -468,9 +479,9 @@ class PipelineJob:
                 record["hooked"] = str(hooked)
                 video = str(hooked)
 
-            if self.config.thumbnail and hook_text and video:
+            if self.config.thumbnail and hook_text and clean_video:
                 thumb = self.root / "clip_{}_thumb.jpg".format(index)
-                create_thumbnail(video, hook_text, str(thumb), position="left")
+                create_thumbnail(clean_video, hook_text, str(thumb), position="left")
                 record["thumbnail"] = str(thumb)
 
             if self.config.effects and video:

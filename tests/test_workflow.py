@@ -362,3 +362,27 @@ def test_stage_failure_is_reported_without_crashing(tmp_path, transcript_file):
     result = job.run("trim")
     assert result.ok is False
     assert result.error
+
+
+def test_clean_video_prefers_trimmed_over_hooked_for_thumbnails(
+    tmp_path, transcript_file
+):
+    job = JobStore(tmp_path / "outputs").create(
+        PipelineConfig(transcript_path=transcript_file)
+    )
+    job.selected = [1]
+    job.trimmed = ["/out/clip_1.mp4"]
+    job.reframed_by_index = {1: "/out/clip_1_vertical.mp4"}
+    job.packages = [{"index": 1, "hooked": "/out/clip_1_hook.mp4"}]
+
+    assert job._clean_video(1) == "/out/clip_1.mp4"
+
+
+def test_type_checker_helpers_accept_standard_arguments():
+    from clipsai.utils.type_checker import TypeChecker
+
+    tc = TypeChecker()
+    assert tc.is_type(42, (int,)) is True
+    assert tc.is_type("x", (int,)) is False
+    assert tc.are_list_elems_of_type(["a", "b"], (str,)) is True
+    assert tc.are_list_elems_of_type(["a", 1], (str,)) is False

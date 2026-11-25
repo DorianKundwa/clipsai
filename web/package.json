@@ -16,7 +16,7 @@
 		"#lib/*": "./src/lib/*"
 	},
 	"engines": {
-		"node": ">=20"
+		"node": ">=20.19"
 	},
 	"dependencies": {
 		"@ffmpeg/core-mt": "^0.12.10",

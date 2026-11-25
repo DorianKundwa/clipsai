@@ -300,3 +300,41 @@ def test_render_hook_png_is_transparent_rgba():
 def test_generate_thumbnail_text_trims():
     stub = StubClient([{"thumbnail_text": "The 3 second rule"}])
     assert generate_thumbnail_text(stub, "transcript") == "The 3 second rule"
+
+
+def test_snap_span_empty_words_clamps_max_duration():
+    result = snap_span(
+        [], 0.0, 90.0, duration=120.0, min_duration=15.0, max_duration=60.0
+    )
+    assert result == (0.0, 60.0)
+
+
+def test_char_bounds_handles_empty_and_tail_times():
+    from clipsai.ai.clips import char_bounds
+
+    empty = Transcription(
+        {
+            "source_software": "TestSoftware",
+            "time_created": datetime.now(),
+            "language": "en",
+            "num_speakers": 1,
+            "char_info": [],
+        }
+    )
+    assert char_bounds(empty, 0.0, 5.0) == (0, 0)
+
+    non_empty = Transcription(
+        {
+            "source_software": "TestSoftware",
+            "time_created": datetime.now(),
+            "language": "en",
+            "num_speakers": 1,
+            "char_info": [
+                {"char": "H", "start_time": 0.0, "end_time": 0.2, "speaker": 0},
+                {"char": "i", "start_time": 0.2, "end_time": 0.4, "speaker": 0},
+            ],
+        }
+    )
+    start_idx, end_idx = char_bounds(non_empty, 999.0, 1010.0)
+    assert start_idx == 1
+    assert end_idx == 2

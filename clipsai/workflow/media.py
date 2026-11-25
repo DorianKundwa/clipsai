@@ -12,7 +12,6 @@ reloading them dominates per-request cost.
 from __future__ import annotations
 
 import json
-import logging
 import threading
 
 # local imports
