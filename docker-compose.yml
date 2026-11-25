@@ -1,0 +1,40 @@
+services:
+  studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PRELOAD_MODELS: ${PRELOAD_MODELS:-false}
+    image: clipsai-studio:latest
+    ports:
+      - "${STUDIO_PORT:-7860}:7860"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CLIPSAI_OUTPUT_DIR: /app/outputs
+      HF_HOME: /app/.cache/huggingface
+      TORCH_HOME: /app/.cache/torch
+      NLTK_DATA: /app/.cache/nltk_data
+    volumes:
+      - ./outputs:/app/outputs
+      - clipsai-cache:/app/.cache
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: clipsai-web:latest
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+    restart: unless-stopped
+
+volumes:
+  clipsai-cache:
