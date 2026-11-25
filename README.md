@@ -65,3 +65,118 @@ crops = resize(
 
 print("Crops: ", crops.segments)
 ```
+
+### Burned-in captions
+
+Clips can get word-timed captions (the same shot, timed relative to the clip start)
+without an extra dependency: cues are built from the transcript, written as SRT/ASS,
+and burned with ffmpeg + libass.
+
+```python
+from clipsai import build_cues, burn_captions, write_srt
+
+cues = build_cues(transcription, start_time=12.0, end_time=42.0, preset="bold")
+write_srt(cues, "/abs/path/to/clip.srt")
+burn_captions("/abs/path/to/clip.mp4", cues, "/abs/path/to/clip_captioned.mp4")
+```
+
+Styles: `bold` (white caps, yellow active word), `clean`, `lime`, `pill`, `oneword`.
+The same features are available in the Studio UI (`python app.py`) as the
+caption stage, with preset and translation options.
+
+### AI features (DeepSeek)
+
+AI features use DeepSeek's OpenAI-compatible API and need only a text transcript,
+so they run without a GPU or a vision model:
+
+```bash
+export DEEPSEEK_API_KEY=sk-...        # https://platform.deepseek.com
+# optional: DEEPSEEK_BASE_URL, DEEPSEEK_MODEL (default deepseek-chat)
+```
+
+```python
+from clipsai import AIClipFinder, Transcription
+from clipsai.ai import LLMClient, package_clip, translate_cues, suggest_edits
+
+clips = AIClipFinder(min_clip_duration=15, max_clip_duration=60).find_clips(transcription)
+print(clips[0].hook, clips[0].title)
+
+metadata = package_clip(LLMClient(), transcription, clips[0].start_time,
+                        clips[0].end_time)
+translated = translate_cues(LLMClient(), cues, "Spanish")
+edits = suggest_edits(LLMClient(), transcript_text, duration=30)
+```
+
+Also available: `burn_hook()` / `render_hook_png()` for hook overlays,
+`create_thumbnail()` for a 1280x720 thumbnail composed from a real frame, and
+`apply_edits()` for validated ffmpeg effect rendering.
+
+In the Studio UI, DeepSeek drives the clip finder, AI packaging and auto effects
+stages, and provides caption translation; every one of them is optional.
+
+## ClipsAI Studio: guided pipeline
+
+`python app.py` opens a single **Pipeline** tab. Set the options once, then run a
+stage; every completed stage returns its files and the choices that make sense
+next (find clips, trim, reframe, captions, AI packaging, publish).
+
+- All processing lives in `clipsai.workflow` (`PipelineConfig`, `PipelineJob`,
+  `StageResult`, `JobStore`). Each job writes to `outputs/<job_id>/` with a
+  `manifest.json` recording settings, artifacts and published post ids.
+- The **Services** tab reports DeepSeek, HuggingFace and IndiePost readiness and
+  can list the connected IndiePost accounts.
+- Credentials are **never** entered in the UI. Copy `.env.example` to `.env`:
+
+```bash
+DEEPSEEK_API_KEY=...       # AI features
+HF_TOKEN=...               # pyannote diarization / vertical reframing
+INDIEPOST_API_KEY=...      # publishing
+```
+
+`DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL` and `INDIEPOST_BASE_URL` are optional, and
+real environment variables win over `.env`.
+
+### Publishing (IndiePost)
+
+The publish stage uploads the rendered clip and creates one post group for the
+platforms you select. Platform rules are enforced locally before anything is
+uploaded (X is rejected; YouTube needs a title and `short|long`; TikTok needs a
+valid privacy level; paid-partnership posts cannot be `SELF_ONLY`). Every post
+carries an idempotency key derived from the job, clip and file, so retries do not
+duplicate posts. See `docs/indiepost.md` for the API flow, limits and MCP setup
+(`.mcp.json.example`). Vision-only features from other
+projects (layout picking, burned-subtitle detection, frame grounding) are not
+ported because DeepSeek's API accepts text only.
+
+## Browser studio (`web/`)
+
+A SvelteKit front end for the same edit → render → publish loop with no Python
+server in the path: footage is decoded, trimmed, reframed and encoded locally by
+ffmpeg.wasm in a Web Worker.
+
+```bash
+cd web
+npm install
+npm run dev        # http://127.0.0.1:5173
+npm run build && npm start   # production Node server
+```
+
+`start.bat` (repository root) starts this studio and the Python pipeline UI
+(`app.py`) together, each in its own window.
+
+- `/studio` picks which linked accounts the clip is for, then trims, frames and grades it.
+  **Auto from platforms** sets 9:16 for TikTok/Reels/Facebook (and YouTube Shorts) and
+  16:9 only for YouTube long-form; picking a frame by hand turns the auto mode off.
+  Encoding runs in a worker, so the preview and timeline stay responsive.
+- `/exports` lists rendered clips (they live in browser memory), downloads them
+  and publishes them through IndiePost. Tick or untick the linked-account chips to
+  choose destinations; the selection is remembered and shared with the studio.
+- **Write with DeepSeek** in the publish dialog drafts the YouTube title, the
+  caption and hashtags from the export plus an optional note about the content.
+- `/library` lists the post groups IndiePost reports (with per-platform status)
+  and the media it stores, and can delete either.
+- The app reads the same repository `.env` as the Python pipeline
+  (`DEEPSEEK_API_KEY`, `INDIEPOST_API_KEY`). The keys are only read by server
+  endpoints; they are never bundled into the browser bundle.
+- It needs the COOP/COEP headers the dev server and `server.js` attach — a plain
+  static host will not load the multithreaded core.
