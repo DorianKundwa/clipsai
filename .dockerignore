@@ -1,0 +1,30 @@
+# Keep the build context small and free of secrets/artifacts.
+
+# VCS and environment
+.git
+.gitignore
+.venv
+venv
+env
+
+# Python caches
+__pycache__
+*.py[cod]
+.pytest_cache
+*.egg-info
+
+# Generated / local data
+outputs
+data
+test_files
+
+# Not needed in the image
+report
+sandbox
+tests
+*.ipynb
+*.log
+
+# Sibling reference repos cloned into this workspace
+openshorts
+opensource-clipping

@@ -60,5 +60,8 @@ setup(
             "pytest",
             "twine",
         ],
+        "ui": [
+            "gradio>=4.44,<5",
+        ],
     },
 )
