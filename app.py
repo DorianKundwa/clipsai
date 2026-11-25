@@ -682,7 +682,26 @@ def build_ui() -> gr.Blocks:
 # --------------------------------------------------------------------------- #
 # Entrypoint
 # --------------------------------------------------------------------------- #
+def _parse_size_bytes(raw: str) -> int:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return 2 * 1024 * 1024 * 1024
+    units = (("gb", 1024 ** 3), ("mb", 1024 ** 2), ("kb", 1024), ("b", 1))
+    for suffix, factor in units:
+        if text.endswith(suffix):
+            try:
+                return max(1, int(float(text[: -len(suffix)].strip()) * factor))
+            except ValueError:
+                break
+    try:
+        return max(1, int(text))
+    except ValueError:
+        return 2 * 1024 * 1024 * 1024
+
+
 def main() -> None:
+    import threading
+    import webbrowser
     from clipsai.config import load_env
 
     loaded = load_env(BASE_DIR / ".env")
@@ -702,6 +721,11 @@ def main() -> None:
         "--port", type=int, default=int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
     )
     parser.add_argument("--share", action="store_true", help="Create a public Gradio share link")
+    parser.add_argument(
+        "--gradio",
+        action="store_true",
+        help="Launch the legacy Gradio UI instead of the unified SvelteKit app",
+    )
     parser.add_argument(
         "--no-browser", action="store_true", help="Do not open a browser window"
     )
@@ -731,17 +755,36 @@ def main() -> None:
         )
 
     _out_dir()
-    demo = build_ui()
-    demo.queue()
-    demo.launch(
-        server_name=args.host,
-        server_port=args.port,
-        share=args.share,
-        inbrowser=not args.no_browser,
-        show_api=False,
+
+    if args.gradio or args.share:
+        demo = build_ui()
+        demo.queue()
+        demo.launch(
+            server_name=args.host,
+            server_port=args.port,
+            share=args.share,
+            inbrowser=not args.no_browser,
+            show_api=False,
+            auth=auth,
+            max_file_size=args.max_file_size or None,
+        )
+        return
+
+    import uvicorn
+    from clipsai.web_server import create_app
+
+    fastapi_app = create_app(
+        output_dir=_out_dir(),
+        env_file=BASE_DIR / ".env",
         auth=auth,
-        max_file_size=args.max_file_size or None,
+        max_upload_bytes=_parse_size_bytes(args.max_file_size),
     )
+    browser_host = "127.0.0.1" if args.host in ("0.0.0.0", "::", "") else args.host
+    url = "http://{}:{}".format(browser_host, args.port)
+    print("[ClipsAI Studio] Unified Studio listening on {}".format(url))
+    if not args.no_browser:
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    uvicorn.run(fastapi_app, host=args.host, port=args.port, log_level="info")
 
 
 if __name__ == "__main__":

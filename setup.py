@@ -61,7 +61,10 @@ setup(
             "twine",
         ],
         "ui": [
+            "fastapi",
             "gradio>=4.44,<5",
+            "python-multipart",
+            "uvicorn",
         ],
     },
 )
