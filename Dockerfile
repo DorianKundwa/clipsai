@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# ClipsAI Studio - production image (CPU-only).
+# ClipsAI Studio - unified production image (SvelteKit SPA + FastAPI ML API).
 #
 # Build:
 #   docker build -t clipsai-studio .
@@ -19,6 +19,17 @@
 # alignment, and SentenceTransformer weights. Pyannote speaker diarization
 # weights download into HF_HOME on first use (or via scripts/download_models.py)
 # when HF_TOKEN has access to the gated pyannote repos.
+
+FROM node:22-slim AS web-builder
+
+WORKDIR /web
+
+COPY web/package.json web/package-lock.json ./
+COPY web/scripts ./scripts
+RUN npm ci
+
+COPY web .
+RUN npm run build
 
 FROM python:3.9-slim
 
@@ -49,7 +60,7 @@ RUN pip install --upgrade pip \
     && pip install "torch==2.2.2" "torchaudio==2.2.2" "torchvision==0.17.2" \
         --index-url https://download.pytorch.org/whl/cpu
 
-# Install ClipsAI + the UI, pinned by the committed lock file.
+# Install ClipsAI + the UI/API stack, pinned by the committed lock file.
 COPY constraints.txt ./
 COPY setup.py setup.cfg README.md ./
 COPY clipsai ./clipsai
@@ -58,6 +69,7 @@ RUN pip install -c constraints.txt "setuptools<81" \
 
 COPY app.py ./
 COPY scripts ./scripts
+COPY --from=web-builder /web/build/client ./web/build/client
 
 RUN mkdir -p /app/outputs /app/.cache/huggingface /app/.cache/torch /app/.cache/nltk_data \
     && python -c "import nltk; nltk.download('punkt', download_dir='/app/.cache/nltk_data', quiet=True); nltk.download('punkt_tab', download_dir='/app/.cache/nltk_data', quiet=True)" \
@@ -72,6 +84,6 @@ EXPOSE 7860
 VOLUME ["/app/outputs", "/app/.cache"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/', timeout=5)"]
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/api/health', timeout=5)"]
 
 CMD ["python", "app.py", "--host", "0.0.0.0", "--no-browser"]

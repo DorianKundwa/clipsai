@@ -48,10 +48,11 @@
 		</p>
 
 		<div class="actions">
+			<a class="btn btn-primary" href="/pipeline">Auto AI pipeline</a>
 			{#if current}
-				<a class="btn btn-primary" href="/studio">Continue with {current.name}</a>
+				<a class="btn" href="/studio">Continue with {current.name}</a>
 			{:else}
-				<a class="btn btn-primary" href="/studio">Open the studio</a>
+				<a class="btn" href="/studio">Open manual studio</a>
 			{/if}
 			<a class="btn btn-ghost" href="/exports">
 				View exports

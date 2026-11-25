@@ -100,6 +100,7 @@ class VideoStore {
 	});
 
 	readonly seekListeners = new Set<(time: number) => void>();
+	#pendingRange: { start: number; end: number } | null = null;
 
 	/**
 	 * The <video> element lives in the studio, not here, so the store asks
@@ -112,6 +113,7 @@ class VideoStore {
 
 	attach(file: File): void {
 		if (this.source) URL.revokeObjectURL(this.source.url);
+		this.#pendingRange = null;
 
 		this.source = {
 			file,
@@ -130,11 +132,77 @@ class VideoStore {
 		this.playing = false;
 	}
 
+	/** Load a clip or source file rendered by the Python pipeline into Studio. */
+	async attachFromUrl(
+		url: string,
+		fileName: string,
+		trimRange?: { start?: number; end?: number }
+	): Promise<void> {
+		const response = await fetch(url);
+		if (!response.ok) throw new Error(`Could not load clip (HTTP ${response.status}).`);
+		const blob = await response.blob();
+		const file = new File([blob], fileName, { type: blob.type || 'video/mp4' });
+		this.attach(file);
+		if (trimRange && (trimRange.start !== undefined || trimRange.end !== undefined)) {
+			this.#pendingRange = {
+				start: Math.max(0, Number(trimRange.start ?? 0)),
+				end: Math.max(0, Number(trimRange.end ?? 0))
+			};
+		}
+	}
+
+	/** Import a Python-rendered clip straight into Exports for download or IndiePost publish. */
+	async importExportFromUrl(
+		url: string,
+		label: string,
+		fileName: string,
+		options: Partial<TrimOptions> = {}
+	): Promise<RenderJob> {
+		const response = await fetch(url);
+		if (!response.ok) throw new Error(`Could not load export (HTTP ${response.status}).`);
+		const blob = await response.blob();
+		const now = Date.now();
+		const job: RenderJob = {
+			id: uid(),
+			label: label || safeName(fileName),
+			fileName,
+			status: 'done',
+			progress: 1,
+			options: {
+				start: options.start ?? 0,
+				end: options.end ?? 0,
+				aspect: options.aspect ?? '9:16',
+				look: options.look ?? 'none'
+			},
+			sourceName: label || fileName,
+			createdAt: now,
+			startedAt: now,
+			finishedAt: now,
+			size: blob.size,
+			url: URL.createObjectURL(blob),
+			error: null,
+			published: null
+		};
+		this.jobs = [job, ...this.jobs];
+		return job;
+	}
+
 	/** Called once the browser has read the media metadata. */
 	setDuration(seconds: number): void {
 		if (!this.source || !Number.isFinite(seconds)) return;
 
 		this.source.duration = seconds;
+		if (this.#pendingRange) {
+			const { start, end } = this.#pendingRange;
+			this.#pendingRange = null;
+			const clampedStart = Math.min(Math.max(0, start), Math.max(0, seconds - MIN_CLIP));
+			const clampedEnd = Math.min(Math.max(clampedStart + MIN_CLIP, end || seconds), seconds);
+			this.inPoint = clampedStart;
+			this.outPoint = clampedEnd;
+			this.currentTime = clampedStart;
+			for (const listener of this.seekListeners) listener(clampedStart);
+			return;
+		}
 		this.inPoint = 0;
 		this.outPoint = seconds;
 		this.currentTime = Math.min(this.currentTime, seconds);

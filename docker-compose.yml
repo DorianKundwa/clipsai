@@ -21,20 +21,5 @@ services:
       - clipsai-cache:/app/.cache
     restart: unless-stopped
 
-  web:
-    build:
-      context: ./web
-      dockerfile: Dockerfile
-    image: clipsai-web:latest
-    ports:
-      - "${WEB_PORT:-3000}:3000"
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      HOST: 0.0.0.0
-      PORT: 3000
-    restart: unless-stopped
-
 volumes:
   clipsai-cache:

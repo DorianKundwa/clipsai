@@ -1,8 +1,30 @@
 import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
-import { defineConfig, type Plugin, type PreviewServer, type ViteDevServer } from 'vite';
+import {
+	defineConfig,
+	type Plugin,
+	type PreviewServer,
+	type ViteDevServer
+} from 'vite';
 import { isolationHeaders } from './isolation-headers.js';
+
+/**
+ * Extend adapter-node so `build/client/` also receives an SPA `index.html`
+ * fallback. That lets the single Python FastAPI backend serve the entire app
+ * without a separate Node server, while keeping `node server.js` functional.
+ */
+function unifiedAdapter() {
+	const base = adapter();
+	return {
+		...base,
+		name: 'clipsai:unified-adapter',
+		async adapt(builder: Parameters<NonNullable<ReturnType<typeof adapter>['adapt']>>[0]) {
+			await base.adapt(builder);
+			await builder.generateFallback('build/client/index.html');
+		}
+	};
+}
 
 /**
  * `server.headers` only covers responses Vite itself generates. Files in
@@ -38,9 +60,8 @@ function crossOriginIsolation(): Plugin {
 
 export default defineConfig({
 	plugins: [
-				sveltekit({
-			// adapter-node keeps the real Node server in the build output.
-			adapter: adapter(),
+		sveltekit({
+			adapter: unifiedAdapter(),
 			preprocess: vitePreprocess(),
 			// The web app and the Python backend share the repository .env, so the
 			// IndiePost key is configured in one place.
@@ -53,7 +74,12 @@ export default defineConfig({
 		host: '127.0.0.1',
 		port: 5173,
 		strictPort: true,
-		headers: isolationHeaders
+		headers: isolationHeaders,
+		proxy: {
+			'/api/pipeline': process.env.CLIPSAI_BACKEND_URL || 'http://127.0.0.1:7860',
+			'/api/services': process.env.CLIPSAI_BACKEND_URL || 'http://127.0.0.1:7860',
+			'/api/health': process.env.CLIPSAI_BACKEND_URL || 'http://127.0.0.1:7860'
+		}
 	},
 
 	preview: {
