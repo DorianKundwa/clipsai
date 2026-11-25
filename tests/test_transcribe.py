@@ -45,42 +45,42 @@ def test_assert_valid_config(transcriber_config_manager: TranscriberConfigManage
 
 
 # Testing MediaEditor
-@patch("media.temporal_media_file.TemporalMediaFile.assert_exists")
+@patch("clipsai.media.temporal_media_file.TemporalMediaFile.assert_exists")
 def test_instantiate_as_audio_file(mock_assert_exists, media_editor: MediaEditor):
     mock_assert_exists.return_value = None
     with patch(
-        "media.temporal_media_file.TemporalMediaFile.has_audio_stream",
+        "clipsai.media.temporal_media_file.TemporalMediaFile.has_audio_stream",
         return_value=True,
     ), patch(
-        "media.temporal_media_file.TemporalMediaFile.has_video_stream",
+        "clipsai.media.temporal_media_file.TemporalMediaFile.has_video_stream",
         return_value=False,
     ):
         result = media_editor.instantiate_as_temporal_media_file("path/to/audio.mp3")
     assert isinstance(result, AudioFile)
 
 
-@patch("media.temporal_media_file.TemporalMediaFile.assert_exists")
+@patch("clipsai.media.temporal_media_file.TemporalMediaFile.assert_exists")
 def test_instantiate_as_audio_video_file(mock_assert_exists, media_editor: MediaEditor):
     mock_assert_exists.return_value = None
     with patch(
-        "media.temporal_media_file.TemporalMediaFile.has_audio_stream",
+        "clipsai.media.temporal_media_file.TemporalMediaFile.has_audio_stream",
         return_value=True,
     ), patch(
-        "media.temporal_media_file.TemporalMediaFile.has_video_stream",
+        "clipsai.media.temporal_media_file.TemporalMediaFile.has_video_stream",
         return_value=True,
     ):
         result = media_editor.instantiate_as_temporal_media_file("path/to/video.mp4")
     assert isinstance(result, AudioVideoFile)
 
 
-@patch("media.temporal_media_file.TemporalMediaFile.assert_exists")
+@patch("clipsai.media.temporal_media_file.TemporalMediaFile.assert_exists")
 def test_instantiate_invalid_file(mock_assert_exists, media_editor: MediaEditor):
     mock_assert_exists.return_value = None
     with patch(
-        "media.temporal_media_file.TemporalMediaFile.has_audio_stream",
+        "clipsai.media.temporal_media_file.TemporalMediaFile.has_audio_stream",
         return_value=False,
     ), patch(
-        "media.temporal_media_file.TemporalMediaFile.has_video_stream",
+        "clipsai.media.temporal_media_file.TemporalMediaFile.has_video_stream",
         return_value=False,
     ):
         with pytest.raises(MediaEditorError):
@@ -140,12 +140,12 @@ def test_store_as_json_file():
     mock_json_file = JSONFile("path/to/output.json")
     transcription = Transcription(valid_transcription_data)
 
-    with patch("filesys.json_file.JSONFile.assert_has_file_extension"), patch(
-        "filesys.manager.FileSystemManager.assert_parent_dir_exists"
-    ), patch("filesys.json_file.JSONFile.delete"), patch(
-        "filesys.json_file.JSONFile.create", return_value=mock_json_file
+    with patch("clipsai.filesys.json_file.JSONFile.assert_has_file_extension"), patch(
+        "clipsai.filesys.manager.FileSystemManager.assert_parent_dir_exists"
+    ), patch("clipsai.filesys.json_file.JSONFile.delete"), patch(
+        "clipsai.filesys.json_file.JSONFile.create", return_value=mock_json_file
     ), patch(
-        "filesys.json_file.JSONFile.assert_exists"
+        "clipsai.filesys.json_file.JSONFile.assert_exists"
     ):
         json_file = transcription.store_as_json_file("path/to/output.json")
 
@@ -159,3 +159,28 @@ def test_invalid_times_exception():
     transcription = Transcription(valid_transcription_data)
     with pytest.raises(TranscriptionError):
         transcription.get_char_info(start_time=-1, end_time=5)
+
+
+def test_get_char_info_ignores_untimed_characters():
+    # WhisperX does not time every character (spaces usually have no times);
+    # a time-ranged lookup must still work and skip them.
+    data = {
+        "source_software": "TestSoftware",
+        "time_created": datetime.now(),
+        "language": "en",
+        "num_speakers": None,
+        "char_info": [
+            {"char": "H", "start_time": 0.0, "end_time": 0.4, "speaker": None},
+            {"char": "i", "start_time": 0.4, "end_time": 0.8, "speaker": None},
+            {"char": " ", "start_time": None, "end_time": None, "speaker": None},
+            {"char": "y", "start_time": 0.9, "end_time": 1.3, "speaker": None},
+            {"char": "o", "start_time": 1.3, "end_time": 1.7, "speaker": None},
+        ],
+    }
+    transcription = Transcription(data)
+    # the range is inclusive of every character that overlaps it
+    chars = transcription.get_char_info(0.2, 1.4)
+    assert "".join(c["char"] for c in chars) == "Hi yo"
+    # a range past the untimed space resolves without a TypeError
+    assert "".join(c["char"] for c in transcription.get_char_info(1.0, 1.5)) == "yo"
+    assert transcription.find_char_index(1.0, "start") >= 3

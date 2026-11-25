@@ -172,7 +172,7 @@ def test_calc_n_batches(
 
     # Mock pytorch.get_free_cpu_memory ~7.5 GiB
     with patch("torch.cuda.is_available", return_value=gpu_available), patch(
-        "utils.pytorch.get_free_cpu_memory", return_value=8000000000
+        		"clipsai.utils.pytorch.get_free_cpu_memory", return_value=8000000000
     ):
         n_batches = resizer._calc_n_batches(
             video_file=mock_video_file,
