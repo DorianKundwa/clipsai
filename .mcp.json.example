@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "indiepost": {
+      "url": "https://www.indiepost.app/api/mcp",
+      "headers": {
+        "Authorization": "Bearer ${INDIEPOST_API_KEY}"
+      }
+    }
+  }
+}
