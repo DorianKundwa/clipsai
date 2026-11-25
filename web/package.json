@@ -1,0 +1,36 @@
+{
+	"name": "clipsai-web",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"preview": "vite preview",
+		"start": "node --env-file-if-exists=../.env server.js",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"sync:ffmpeg": "node scripts/sync-ffmpeg-core.mjs",
+		"postinstall": "node scripts/sync-ffmpeg-core.mjs"
+	},
+	"imports": {
+		"#lib/*": "./src/lib/*"
+	},
+	"engines": {
+		"node": ">=20"
+	},
+	"dependencies": {
+		"@ffmpeg/core-mt": "^0.12.10",
+		"@ffmpeg/ffmpeg": "^0.12.15",
+		"@ffmpeg/util": "^0.12.2"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-node": "^6.0.5",
+		"@sveltejs/kit": "^3.4.0",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
+		"@types/node": "^26.6.6",
+		"svelte": "^5.59.1",
+		"svelte-check": "^4.7.8",
+		"typescript": "^5.9.3",
+		"vite": "^8.3.8"
+	}
+}

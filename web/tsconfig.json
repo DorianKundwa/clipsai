@@ -1,0 +1,23 @@
+{
+	"extends": "$app/tsconfig",
+	"include": ["src"],
+	"exclude": ["build", "src/service-worker"],
+	"compilerOptions": {
+		"baseUrl": ".",
+		"paths": {
+			"#lib": ["src/lib"],
+			"#lib/*": ["src/lib/*"]
+		},
+		"allowJs": true,
+		"checkJs": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"sourceMap": true,
+		"strict": true,
+		"moduleResolution": "bundler",
+		"target": "ES2022",
+		"lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"]
+	}
+}
