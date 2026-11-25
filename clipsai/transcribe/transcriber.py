@@ -186,13 +186,10 @@ class Transcriber:
         # final destination for transcript information
         char_info = []
 
-        # remove global first character -> always a space
-        try:
-            del aligned_transcription["segments"][0]["chars"][0]
-        except Exception as e:
-            print("Error:", str(e))
-            print("Aligned Transcription:", aligned_transcription)
-            raise Exception(str(e))
+        # remove global first character if it is a leading space
+        first_chars = aligned_transcription["segments"][0].get("chars") or []
+        if first_chars and first_chars[0].get("char") == " ":
+            del first_chars[0]
 
         for i, segment in enumerate(aligned_transcription["segments"]):
             segment_chars = segment["chars"]
@@ -243,6 +240,12 @@ class Transcriber:
         audio = whisperx.load_audio(media_file.path)
         language = self._model.detect_language(audio)
         return language
+
+    def cleanup(self) -> None:
+        """Release the loaded WhisperX model and free GPU memory."""
+        self._model = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 class TranscriberConfigManager(ConfigManager):

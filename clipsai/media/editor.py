@@ -3,9 +3,9 @@ Editing media files with ffmpeg.
 """
 # standard library imports
 import logging
-import subprocess
 import os
-import uuid
+import subprocess
+import tempfile
 
 # current package imports
 from .exceptions import MediaEditorError
@@ -915,38 +915,35 @@ class MediaEditor:
         # create a file containing the paths to each media file
         media_file_paths = ""
         for media_file in media_files:
-            media_file_paths += "file '{}'\n".format(media_file.path)
-        media_paths_file = File(
-            os.path.join(
-                os.path.dirname(__file__),
-                "{}_media_file_paths.txt".format(uuid.uuid4().hex),
-            )
-        )
-        # log contents of media_paths_file
+            escaped_path = media_file.path.replace("'", "'\\''")
+            media_file_paths += "file '{}'\n".format(escaped_path)
         logging.debug("media_paths_file contents: %s", media_file_paths)
-        media_paths_file.create(media_file_paths)
-        logging.debug("media_paths_file path: %s", media_paths_file.path)
 
         # concatenate media_files
         logging.debug("Concatenating media files in editor")
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                media_paths_file.path,
-                # add to remove blank screen at beginning of output
-                "-vf",
-                "setpts=PTS-STARTPTS",
-                concatenated_media_file_path,
-            ]
-        )
-        logging.debug("Concatenation complete")
-        media_paths_file.delete()
+        with tempfile.TemporaryDirectory(prefix="clipsai_concat_") as tmp_dir:
+            media_paths_file = File(os.path.join(tmp_dir, "media_file_paths.txt"))
+            media_paths_file.create(media_file_paths)
+            logging.debug("media_paths_file path: %s", media_paths_file.path)
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    media_paths_file.path,
+                    # add to remove blank screen at beginning of output
+                    "-vf",
+                    "setpts=PTS-STARTPTS",
+                    concatenated_media_file_path,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            logging.debug("Concatenation complete")
 
         msg = (
             "Terminal return code: '{}'\n"
@@ -1179,50 +1176,48 @@ class MediaEditor:
             "resized_video_file_path",
         )
 
-        # crop each segment
-        cropped_video_files: list[VideoFile] = []
-        for i, segment in enumerate(segments):
-            cropped_video_file_path = os.path.join(
-                os.path.dirname(__file__),
-                "{}_segment_{}.mp4".format(uuid.uuid4().hex, i),
-            )
-            cropped_video_file = self.crop_video(
-                original_video_file=original_video_file,
-                cropped_video_file_path=cropped_video_file_path,
-                x=segment["x"],
-                y=segment["y"],
-                width=width,
-                height=height,
-                start_time=segment["start_time"],
-                end_time=segment["end_time"],
-                audio_codec=audio_codec,
-                video_codec=video_codec,
-                crf=crf,
-                preset=preset,
-                num_threads=num_threads,
+        # crop each segment inside an isolated temporary directory so failed runs
+        # do not leak files into the installed package directory
+        with tempfile.TemporaryDirectory(prefix="clipsai_resize_") as tmp_dir:
+            cropped_video_files: list[VideoFile] = []
+            for i, segment in enumerate(segments):
+                cropped_video_file_path = os.path.join(
+                    tmp_dir, "segment_{}.mp4".format(i)
+                )
+                cropped_video_file = self.crop_video(
+                    original_video_file=original_video_file,
+                    cropped_video_file_path=cropped_video_file_path,
+                    x=segment["x"],
+                    y=segment["y"],
+                    width=width,
+                    height=height,
+                    start_time=segment["start_time"],
+                    end_time=segment["end_time"],
+                    audio_codec=audio_codec,
+                    video_codec=video_codec,
+                    crf=crf,
+                    preset=preset,
+                    num_threads=num_threads,
+                    overwrite=overwrite,
+                )
+                # failure
+                if cropped_video_file is None:
+                    err = (
+                        "Error in cropping video segment {} with segment information "
+                        "'{}'.".format(i, segment)
+                    )
+                    logging.error(err)
+                    return None
+                # success
+                else:
+                    cropped_video_files.append(cropped_video_file)
+
+            # concatenate cropped segments
+            resized_video_file = self.concatenate(
+                media_files=cropped_video_files,
+                concatenated_media_file_path=resized_video_file_path,
                 overwrite=overwrite,
             )
-            # failure
-            if cropped_video_file is None:
-                err = (
-                    "Error in cropping video segment {} with segment information '{}'."
-                    "".format(i, segment)
-                )
-                logging.error(err)
-                return None
-            # success
-            else:
-                cropped_video_files.append(cropped_video_file)
-
-        # concatenate cropped segments
-        resized_video_file = self.concatenate(
-            media_files=cropped_video_files,
-            concatenated_media_file_path=resized_video_file_path,
-            overwrite=overwrite,
-        )
-        # delete cropped segments
-        for cropped_video_file in cropped_video_files:
-            cropped_video_file.delete()
 
         # failure
         if resized_video_file is None:
@@ -1365,7 +1360,7 @@ class MediaEditor:
         if start_time < 0:
             return "Start second ({} seconds) cannot be negative.".format(start_time)
         if end_time < 0:
-            return "End second ({} seconds) cannot be negative.".format
+            return "End second ({} seconds) cannot be negative.".format(end_time)
         if start_time > end_time:
             return (
                 "Start second ({} seconds) cannot exceed end second ({} seconds)."

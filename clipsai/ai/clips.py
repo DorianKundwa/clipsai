@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # current package imports
 from .llm import LLMClient
@@ -211,7 +211,8 @@ def snap_span(
         original_start, original_end = 0.0, min(duration, max_duration)
     original = (round(original_start, 3), round(original_end, 3))
     if not words:
-        return original
+        clamped_end = min(original_end, original_start + max_duration)
+        return (round(original_start, 3), round(clamped_end, 3))
 
     starts = [w[0] for w in words]
     ends = [w[1] for w in words]
@@ -283,17 +284,21 @@ def dedupe_overlaps(clips: "list[AIClip]", ratio: float = 0.25) -> "list[AIClip]
 def char_bounds(transcription, start: float, end: float) -> "tuple[int, int]":
     """Approximate (start_char, end_char) for a time span, from char timings."""
     char_info = transcription.get_char_info()
-    start_index = 0
+    if not char_info:
+        return (0, 0)
+    start_index = None
     for i, info in enumerate(char_info):
         if info.get("start_time") is not None and float(info["start_time"]) >= start:
             start_index = i
             break
+    if start_index is None:
+        start_index = len(char_info) - 1
     end_index = len(char_info)
     for i, info in enumerate(char_info):
         if info.get("end_time") is not None and float(info["end_time"]) > end:
             end_index = i
             break
-    return start_index, max(start_index + 1, end_index)
+    return start_index, min(len(char_info), max(start_index + 1, end_index))
 
 
 def normalize_spans(

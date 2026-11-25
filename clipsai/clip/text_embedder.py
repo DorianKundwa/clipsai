@@ -11,13 +11,14 @@ class TextEmbedder:
     A class for embedding text using the Roberta model.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, device: str = None) -> None:
         """
         Parameters
         ----------
-        None
+        device: str, optional
+            PyTorch device for sentence embedding inference.
         """
-        self.__model = SentenceTransformer("all-roberta-large-v1")
+        self.__model = SentenceTransformer("all-roberta-large-v1", device=device)
 
     def embed_sentences(self, sentences: list) -> torch.Tensor:
         """

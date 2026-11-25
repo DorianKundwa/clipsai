@@ -273,12 +273,18 @@ class Resizer:
             end_time: float
                 end time of the segment in seconds
         """
+        if not speaker_segments:
+            return speaker_segments
         segments_idx = 0
         for scene_change_sec in scene_changes:
             segment = speaker_segments[segments_idx]
             while scene_change_sec > (segment["end_time"]):
+                if segments_idx + 1 >= len(speaker_segments):
+                    break
                 segments_idx += 1
                 segment = speaker_segments[segments_idx]
+            if scene_change_sec > segment["end_time"]:
+                continue
             # scene change is close to speaker segment end -> merge the two
             if 0 < (segment["end_time"] - scene_change_sec) < scene_merge_threshold:
                 segment["end_time"] = scene_change_sec
@@ -295,8 +301,11 @@ class Resizer:
                 prev_segment = speaker_segments[segments_idx - 1]
                 prev_segment["end_time"] = scene_change_sec
                 continue
-            # scene change already exists
-            if scene_change_sec == segment["end_time"]:
+            # scene change already aligns with or precedes this segment boundary
+            if (
+                scene_change_sec <= segment["start_time"]
+                or scene_change_sec == segment["end_time"]
+            ):
                 continue
             # add scene change to segments
             new_segment = {
@@ -542,17 +551,18 @@ class Resizer:
         logging.debug("Detecting faces in {} frames.".format(len(frames)))
         downsample_factor = max(frames[0].shape[1] / face_detect_width, 1)
         detect_height = int(frames[0].shape[0] / downsample_factor)
+        use_cuda = str(getattr(self._face_detector, "device", "cpu")).startswith("cuda")
         resized_frames = []
         for frame in frames:
             resized_frame = cv2.resize(frame, (face_detect_width, detect_height))
-            if torch.cuda.is_available():
+            if use_cuda:
                 resized_frame = torch.from_numpy(resized_frame).to(
                     device="cuda", dtype=torch.uint8
                 )
             resized_frames.append(resized_frame)
 
         # detect faces in batches
-        if torch.cuda.is_available():
+        if use_cuda:
             resized_frames = torch.stack(resized_frames)
         detections, _ = self._face_detector.detect(resized_frames)
 
@@ -709,16 +719,19 @@ class Resizer:
             first_face_sec = segment["first_face_sec"]
             analyze_end_time = end_time - (end_time - first_face_sec) / 8
             # get sample locations
-            frames_left = int((analyze_end_time - first_face_sec) * fps + 1)
-            num_samples = min(frames_left, samples_per_segment)
+            frames_left = max(1, int((analyze_end_time - first_face_sec) * fps + 1))
+            num_samples = max(1, min(frames_left, samples_per_segment))
             segment["num_samples"] = num_samples
             # add first face, sample the rest
             detect_secs.append(first_face_sec)
-            sample_frames = np.sort(
-                np.random.choice(range(1, frames_left), num_samples - 1, replace=False)
-            )
-            for sample_frame in sample_frames:
-                detect_secs.append(first_face_sec + sample_frame / fps)
+            if num_samples > 1 and frames_left > 1:
+                sample_frames = np.sort(
+                    np.random.choice(
+                        range(1, frames_left), num_samples - 1, replace=False
+                    )
+                )
+                for sample_frame in sample_frames:
+                    detect_secs.append(first_face_sec + sample_frame / fps)
 
         # detect faces from each segment
         logging.debug("Extracting {} frames".format(len(detect_secs)))
@@ -750,7 +763,13 @@ class Resizer:
             del segment["first_face_sec"]
 
             # add crop coordinates to segment
-            crop = self._calc_crop(roi, resize_width, resize_height)
+            crop = self._calc_crop(
+                roi,
+                resize_width,
+                resize_height,
+                video_width=video_file.get_width_pixels(),
+                video_height=video_file.get_height_pixels(),
+            )
             segment["x"] = int(crop.x)
             segment["y"] = int(crop.y)
         logging.debug("Calculated ROI for {} segments.".format(len(segments)))
@@ -887,7 +906,12 @@ class Resizer:
             # sum all roi's, average after loop
             roi += Rect(x1, y1, x2 - x1, y2 - y1)
             frame = frames[bounding_box_data["frame"]]
-            face = frame[y1:y2, x1:x2, :]
+            h, w = frame.shape[:2]
+            cx1, cy1 = max(0, int(x1)), max(0, int(y1))
+            cx2, cy2 = min(w, int(x2)), min(h, int(y2))
+            if cx2 <= cx1 or cy2 <= cy1:
+                continue
+            face = frame[cy1:cy2, cx1:cx2, :]
 
             # mouth movement
             mar = self._calc_mouth_aspect_ratio(face)
@@ -931,6 +955,8 @@ class Resizer:
         lower_lip = landmarks[[191, 80, 81, 82, 13, 312, 311, 310, 415], :]
         avg_mouth_height = np.mean(np.abs(upper_lip - lower_lip))
         mouth_width = np.sum(np.abs(landmarks[[308], :] - landmarks[[78], :]))
+        if mouth_width <= 0:
+            return None
         mar = avg_mouth_height / mouth_width
 
         return mar
@@ -940,6 +966,8 @@ class Resizer:
         roi: Rect,
         resize_width: int,
         resize_height: int,
+        video_width: int = None,
+        video_height: int = None,
     ) -> Rect:
         """
         Calculate the crop given the ROI location.
@@ -956,9 +984,15 @@ class Resizer:
         """
         roi_x_center = roi.x + roi.width // 2
         roi_y_center = roi.y + roi.height // 2
+        x = max(roi_x_center - (resize_width // 2), 0)
+        y = max(roi_y_center - (resize_height // 2), 0)
+        if video_width is not None:
+            x = min(x, max(0, int(video_width) - int(resize_width)))
+        if video_height is not None:
+            y = min(y, max(0, int(video_height) - int(resize_height)))
         crop = Rect(
-            x=max(roi_x_center - (resize_width // 2), 0),
-            y=max(roi_y_center - (resize_height // 2), 0),
+            x=x,
+            y=y,
             width=resize_width,
             height=resize_height,
         )

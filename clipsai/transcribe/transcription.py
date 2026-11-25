@@ -25,7 +25,19 @@ from clipsai.utils.type_checker import TypeChecker
 import nltk
 from nltk.tokenize import sent_tokenize
 
-nltk.download("punkt")
+
+def _ensure_punkt() -> None:
+    """Download NLTK punkt tokenizer data only if missing locally."""
+    try:
+        nltk.data.find("tokenizers/punkt_tab")
+        return
+    except LookupError:
+        pass
+    for pkg in ("punkt_tab", "punkt"):
+        try:
+            nltk.download(pkg, quiet=True)
+        except Exception:  # noqa: BLE001 - handled on sent_tokenize if still missing
+            continue
 
 
 class Transcription:
@@ -110,6 +122,7 @@ class Transcription:
                 return char_info[i]["end_time"]
             if char_info[i]["start_time"] is not None:
                 return char_info[i]["start_time"]
+        return 0.0
 
     @property
     def text(self) -> str:
@@ -130,7 +143,7 @@ class Transcription:
                 Character(
                     start_time=char_info["start_time"],
                     end_time=char_info["end_time"],
-                    word_index=char_info["work_index"],
+                    word_index=char_info.get("word_index", char_info.get("work_index")),
                     sentence_index=char_info["sentence_index"],
                     text=char_info["char"],
                 )
@@ -168,6 +181,7 @@ class Transcription:
                     end_time=sentence_info["end_time"],
                     start_char=sentence_info["start_char"],
                     end_char=sentence_info["end_char"],
+                    text=sentence_info["sentence"],
                 )
             )
         return sentences
@@ -408,7 +422,8 @@ class Transcription:
             print("start_time: {}".format(char_info["start_time"]), end=" | ")
             print("end_time: {}".format(char_info["end_time"]))
             print("index: {}".format(i), end=" | ")
-            print("word_index: {}".format(char_info["work_index"]), end=" | ")
+            word_idx = char_info.get("word_index", char_info.get("work_index"))
+            print("word_index: {}".format(word_idx), end=" | ")
             print("sentence_index: {}\n".format(char_info["sentence_index"]))
 
     def print_word_info(self) -> None:
@@ -565,9 +580,13 @@ class Transcription:
         self._assert_valid_transcription_data(transcription)
 
         if isinstance(transcription["time_created"], str):
-            transcription["time_created"] = datetime.strptime(
-                transcription["time_created"], "%Y-%m-%d %H:%M:%S.%f"
-            )
+            raw_time = transcription["time_created"].strip()
+            try:
+                transcription["time_created"] = datetime.fromisoformat(raw_time)
+            except ValueError:
+                transcription["time_created"] = datetime.strptime(
+                    raw_time, "%Y-%m-%d %H:%M:%S.%f"
+                )
 
         self._created_time = transcription["time_created"]
         self._source_software = transcription["source_software"]
@@ -655,6 +674,9 @@ class Transcription:
             the word_info built from the char_info
         """
         char_info = self.get_char_info()
+        if not char_info:
+            self._word_info = []
+            return []
 
         # final destination for word_info
         word_info = []
@@ -706,7 +728,7 @@ class Transcription:
                 cur_word = ""
 
             # update char info
-            cur_char_info["work_index"] = cur_word_idx
+            cur_char_info["word_index"] = cur_word_idx
 
             # update word info
             if cur_char_info["end_time"] is not None:
@@ -718,18 +740,19 @@ class Transcription:
             cur_word += cur_char
             prev_char_info = cur_char_info
 
-        # last word
-        new_word_info = {
-            "word": cur_word,
-            "start_char": cur_word_start_char_idx,
-            # i is the actual last char index of this word but python
-            # slicing is non-inclusive so we increment by 1
-            "end_char": i + 1,
-            "start_time": cur_word_start_time,
-            "end_time": cur_word_end_time,
-            "speaker": None,
-        }
-        word_info.append(new_word_info)
+        # last word (skip trailing whitespace)
+        if cur_word.strip():
+            new_word_info = {
+                "word": cur_word,
+                "start_char": cur_word_start_char_idx,
+                # i is the actual last char index of this word but python
+                # slicing is non-inclusive so we increment by 1
+                "end_char": len(char_info),
+                "start_time": cur_word_start_time,
+                "end_time": cur_word_end_time,
+                "speaker": None,
+            }
+            word_info.append(new_word_info)
         self._char_info = char_info
         self._word_info = word_info
 
@@ -801,6 +824,7 @@ class Transcription:
         -------
         None
         """
+        _ensure_punkt()
         char_info = self.get_char_info()
         sentences = sent_tokenize(self.text)
 
@@ -908,9 +932,12 @@ class Transcription:
             raise ValueError(err_msg)
 
         for offset in range(1, search_window_size * 2):
-            offset *= -1
-            if char_info[char_idx + offset]["char"] == correct_char:
-                return char_idx + offset
+            for candidate in (char_idx - offset, char_idx + offset):
+                if (
+                    0 <= candidate < len(char_info)
+                    and char_info[candidate]["char"] == correct_char
+                ):
+                    return candidate
 
         # realignment failed
         err_msg = (

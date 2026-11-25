@@ -2,7 +2,6 @@ from setuptools import find_packages, setup
 
 setup(
     name="clipsai",
-    py_modules=["clipsai"],
     version="0.2.1",
     description=(
         "Clips AI is an open-source Python library that automatically converts long "
@@ -24,12 +23,13 @@ setup(
         "numpy",
         "opencv-python",
         "pandas",
+        "Pillow",
         "psutil",
         "pyannote.audio",
         "pyannote.core",
         "pynvml",
-        "pytest",
         "python-magic",
+        "requests",
         "scenedetect",
         "scikit-learn",
         "sentence-transformers",

@@ -91,8 +91,8 @@ class LLMClient:
     def assert_ready(self) -> None:
         if not self.api_key:
             raise MissingAPIKeyError(
-                "No DeepSeek API key configured. Set DEEPSEEK_API_KEY, or paste a "
-                "key in the AI (DeepSeek) tab of ClipsAI Studio."
+                "No DeepSeek API key configured. Set DEEPSEEK_API_KEY in .env or "
+                "your environment, or pass api_key explicitly."
             )
 
     def complete(

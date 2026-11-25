@@ -156,13 +156,18 @@ class PyannoteDiarizer:
         adjusted_speaker_segments = []
         unique_speakers: set[int] = set()
 
+        label_map: dict[str, int] = {}
         for segment, _, speaker_label in pyannote_segments.itertracks(True):
             next_start_time = segment.start
             next_end_time = segment.end
-            if speaker_label.split("_")[1] == "":
+            parts = str(speaker_label or "").split("_")
+            tail = parts[-1] if len(parts) > 1 else ""
+            if tail == "":
                 next_speaker = None
+            elif tail.isdigit():
+                next_speaker = int(tail)
             else:
-                next_speaker = int(speaker_label.split("_")[1])
+                next_speaker = label_map.setdefault(str(speaker_label), len(label_map))
 
             # skip segments that are too short
             if next_end_time - next_start_time < min_segment_duration:
@@ -224,7 +229,7 @@ class PyannoteDiarizer:
 
     def _relabel_speakers(
         self, speaker_segments: list[dict], unique_speakers: set[int]
-    ) -> dict[int, int]:
+    ) -> list[dict]:
         """
         Relabels speaker segments so that the speaker labels are contiguous.
 

@@ -84,6 +84,7 @@ class ClipFinder:
         self._max_clip_duration = max_clip_duration
         self._smoothing_width = smoothing_width
         self._window_compare_pool_method = window_compare_pool_method
+        self._text_embedder = None
 
     def find_clips(
         self,
@@ -107,10 +108,13 @@ class ClipFinder:
         sentences_info = transcription.get_sentence_info()
         for sentence_info in sentences_info:
             sentences.append(sentence_info["sentence"])
+        if not sentences:
+            return []
 
-        # embed sentences
-        text_embedder = TextEmbedder()
-        sentence_embeddings = text_embedder.embed_sentences(sentences)
+        # embed sentences (reuse the model across calls)
+        if self._text_embedder is None:
+            self._text_embedder = TextEmbedder(device=self._device)
+        sentence_embeddings = self._text_embedder.embed_sentences(sentences)
 
         # add full media as clip
         clips = []
@@ -181,8 +185,10 @@ class ClipFinder:
         k: int,
         min_clip_duration: int,
         max_clip_duration: int,
-        final_clips: list[dict] = [],
+        final_clips: list[dict] = None,
     ) -> tuple[list, torch.Tensor]:
+        if final_clips is None:
+            final_clips = []
         """
         Segments the embeddings multiple rounds using the TextTiling algorithm.
 

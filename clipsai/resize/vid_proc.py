@@ -53,22 +53,27 @@ def extract_frames(
             raise VideoProcessingError(err)
 
     # find all the frames to process
-    container = av.open(video_file.path)
-    stream = container.streams.video[0]
+    with av.open(video_file.path) as container:
+        stream = container.streams.video[0]
 
-    extract_times_pts = [
-        int(extract_sec / stream.time_base) for extract_sec in extract_secs
-    ]
-    frames_to_process = []
-    for extract_pts in extract_times_pts:
-        # Seek to the nearest keyframe to our desired timestamp
-        container.seek(extract_pts, stream=stream)
-        prev_frame = None
-        for frame in container.decode(stream):
-            if frame.pts > extract_pts:
-                frames_to_process.append(prev_frame or frame)
-                break
-            prev_frame = frame
+        extract_times_pts = [
+            int(extract_sec / stream.time_base) for extract_sec in extract_secs
+        ]
+        frames_to_process = []
+        for extract_pts in extract_times_pts:
+            # Seek to the nearest keyframe to our desired timestamp
+            container.seek(extract_pts, stream=stream)
+            prev_frame = None
+            matched_frame = None
+            for frame in container.decode(stream):
+                if frame.pts is not None and frame.pts > extract_pts:
+                    matched_frame = prev_frame or frame
+                    break
+                prev_frame = frame
+            if matched_frame is None and prev_frame is not None:
+                matched_frame = prev_frame
+            if matched_frame is not None:
+                frames_to_process.append(matched_frame)
     assert len(frames_to_process) == len(extract_secs)
 
     # define function for parallel processing

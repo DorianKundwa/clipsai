@@ -56,10 +56,7 @@ class TypeChecker:
         bool
             True if 'data' is of any type in 'correct_types', False if it isn't
         """
-        if self.check_type(data, correct_types) is None:
-            return True
-        else:
-            return False
+        return self.check_type(data, "data", correct_types) is None
 
     def assert_type(self, data, data_label: str, correct_types: tuple) -> None:
         """
@@ -161,11 +158,9 @@ class TypeChecker:
             Returns False if any variable in 'data' is not of any type in
             'correct_types'
         """
-        msg = self.check_list_types(data, correct_types)
-        if msg is None:
-            return True
-        else:
-            return False
+        labels = [str(i) for i in range(len(data))] if isinstance(data, list) else []
+        msg = self.check_list_types(data, labels, correct_types)
+        return msg is None
 
     def assert_list_elems_type(
         self,
