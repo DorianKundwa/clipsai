@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import shutil
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -52,6 +54,95 @@ REQUIRES = {
     "package": ("find_clips",),
     "publish": ("trim",),
 }
+
+
+_JOB_ID_RE = re.compile(r"^[0-9a-f]{10}$")
+_CLIP_RENDER_RE = re.compile(r"^clip_(\d+)_(?:captions|hook|effects)\.mp4$")
+_CLIP_PLAIN_RE = re.compile(r"^clip_(\d+)(?:_vertical)?\.mp4$")
+_TEMP_FILE_RE = re.compile(r"^(?:\..*\.part|.*\.tmp)$")
+
+
+def _dir_size(path: Path) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return total
+
+
+def _disk_entry(path: Path, *, live: bool) -> dict:
+    """Size and age of one job folder, using its manifest when it has one."""
+    created = ""
+    updated = ""
+    manifest = path / "manifest.json"
+    if manifest.is_file():
+        try:
+            with open(manifest, encoding="utf-8") as handle:
+                data = json.load(handle)
+            created = str(data.get("created") or "")
+            updated = str(data.get("updated") or "")
+        except (OSError, ValueError):
+            pass
+
+    files = 0
+    size = 0
+    for root, _dirs, names in os.walk(path):
+        for name in names:
+            try:
+                size += os.path.getsize(os.path.join(root, name))
+                files += 1
+            except OSError:
+                pass
+
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    stamp = updated or created
+    try:
+        moment = datetime.fromisoformat(stamp) if stamp else datetime.fromtimestamp(mtime)
+    except ValueError:
+        moment = datetime.fromtimestamp(mtime)
+
+    return {
+        "job_id": path.name,
+        "path": str(path),
+        "size": int(size),
+        "files": int(files),
+        "created": created,
+        "updated": moment.isoformat(timespec="seconds"),
+        "age_days": round(max(0.0, (datetime.now() - moment).total_seconds() / 86400), 2),
+        "live": bool(live),
+    }
+
+
+def _workspace_entry(path: Path, *, root_key: str) -> dict:
+    """Size and age of one campaign workspace folder."""
+    files = 0
+    size = 0
+    for root, _dirs, names in os.walk(path):
+        for name in names:
+            try:
+                size += os.path.getsize(os.path.join(root, name))
+                files += 1
+            except OSError:
+                pass
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return {
+        "name": path.name,
+        "root": root_key,
+        "path": str(path),
+        "size": int(size),
+        "files": int(files),
+        "updated": datetime.fromtimestamp(mtime).isoformat(timespec="seconds"),
+        "age_days": round(max(0.0, (datetime.now().timestamp() - mtime) / 86400), 2),
+    }
 
 
 class WorkflowError(Exception):
@@ -667,11 +758,20 @@ class PipelineJob:
 class JobStore:
     """In-process registry of pipeline jobs, keyed by id."""
 
-    def __init__(self, root: "str | Path" = "outputs") -> None:
+    def __init__(
+        self,
+        root: "str | Path" = "outputs",
+        workspaces: "dict[str, str | Path] | None" = None,
+    ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self._jobs: "dict[str, PipelineJob]" = {}
         self._lock = threading.Lock()
+        self.workspaces: "dict[str, Path]" = {
+            str(key): Path(value)
+            for key, value in (workspaces or {}).items()
+            if str(value or "")
+        }
 
     def create(self, config: PipelineConfig, **kwargs) -> PipelineJob:
         config.validate()
@@ -687,3 +787,225 @@ class JobStore:
     def all(self) -> "list[PipelineJob]":
         with self._lock:
             return list(self._jobs.values())
+
+    # ------------------------------------------------------------------ #
+    # Storage: per-job size, deletion, retention
+    # ------------------------------------------------------------------ #
+
+    def path_for(self, job_id: str) -> Path:
+        """Folder of one job, rejecting ids that could escape ``root``."""
+        job_id = str(job_id or "").strip()
+        if not _JOB_ID_RE.match(job_id):
+            raise ValueError("Invalid job id: {!r}".format(job_id))
+        return self.root / job_id
+
+    def delete(self, job_id: str) -> int:
+        """Delete one job's folder, whether it is live or left from an old run.
+
+        Returns the number of bytes freed.
+        """
+        path = self.path_for(job_id)
+        freed = _dir_size(path)
+        with self._lock:
+            self._jobs.pop(str(job_id), None)
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=False)
+        return freed
+
+    def disk_jobs(self) -> "list[dict]":
+        """Every pipeline job folder on disk, newest first.
+
+        Jobs live in memory only, so folders written by an earlier server run are
+        listed here too: they are the ones that otherwise pile up unseen.
+        """
+        entries = []
+        if not self.root.is_dir():
+            return entries
+        for child in self.root.iterdir():
+            try:
+                if not child.is_dir() or not _JOB_ID_RE.match(child.name):
+                    continue
+            except OSError:
+                continue
+            entries.append(_disk_entry(child, live=self.get(child.name) is not None))
+        entries.sort(key=lambda e: (e["updated"], e["job_id"]), reverse=True)
+        return entries
+
+    def workspace_entries(self) -> "list[dict]":
+        """Campaign workspaces: every non-job folder in the workspace roots.
+
+        These are the hand-built campaign folders (``outputs/<campaign>``) and the
+        scratch material behind them (``work/<project>``), which the pipeline
+        never lists but which take most of the space in practice.
+        """
+        entries = []
+        for root_key, base in self.workspaces.items():
+            if not base.is_dir():
+                continue
+            for child in base.iterdir():
+                try:
+                    if not child.is_dir() or child.name.startswith("."):
+                        continue
+                    if _JOB_ID_RE.match(child.name):
+                        continue
+                except OSError:
+                    continue
+                entries.append(_workspace_entry(child, root_key=root_key))
+        entries.sort(key=lambda e: e["size"], reverse=True)
+        return entries
+
+    def delete_workspace(self, root_key: str, name: str) -> int:
+        """Delete one campaign workspace folder; returns the bytes freed."""
+        base = self.workspaces.get(str(root_key or ""))
+        if base is None:
+            raise ValueError("Unknown workspace root: {!r}".format(root_key))
+        name = str(name or "").strip()
+        if not name or name in (".", "..") or "/" in name or "\\" in name:
+            raise ValueError("Invalid workspace name: {!r}".format(name))
+        base_resolved = base.resolve()
+        target = (base_resolved / name).resolve()
+        if target.parent != base_resolved:
+            raise ValueError("Invalid workspace name: {!r}".format(name))
+        if not target.is_dir():
+            raise FileNotFoundError(str(target))
+        freed = _dir_size(target)
+        shutil.rmtree(target)
+        return freed
+
+    def usage(self) -> dict:
+        """Disk footprint of the output root, its jobs, workspaces and free space."""
+        jobs = self.disk_jobs()
+        jobs_bytes = sum(job["size"] for job in jobs)
+        workspaces = self.workspace_entries()
+        try:
+            total, _used, free = shutil.disk_usage(str(self.root))
+        except OSError:
+            total, free = 0, 0
+        return {
+            "root": str(self.root.resolve()),
+            "jobs": jobs,
+            "jobs_bytes": jobs_bytes,
+            "jobs_count": len(jobs),
+            "workspaces": workspaces,
+            "workspaces_bytes": sum(item["size"] for item in workspaces),
+            "workspace_roots": {key: str(path.resolve()) for key, path in self.workspaces.items()},
+            "disk_total_bytes": int(total),
+            "disk_free_bytes": int(free),
+        }
+
+    def cleanup(
+        self,
+        *,
+        older_than_days: "float | None" = None,
+        keep_latest: "int | None" = None,
+        max_total_bytes: "int | None" = None,
+        dry_run: bool = False,
+        is_running=None,
+    ) -> dict:
+        """Delete old job folders according to a retention policy.
+
+        The newest ``keep_latest`` jobs are always protected, as is anything a
+        stage is currently writing. ``max_total_bytes`` keeps deleting the oldest
+        removable job until the remaining jobs fit the budget.
+        """
+        jobs = self.disk_jobs()
+        running = is_running or (lambda job_id: False)
+
+        protected = {job["job_id"] for job in jobs if job["live"] and running(job["job_id"])}
+        if keep_latest and keep_latest > 0:
+            protected.update(job["job_id"] for job in jobs[: int(keep_latest)])
+
+        removable = [job for job in jobs if job["job_id"] not in protected]
+        doomed = []
+
+        if older_than_days is not None and older_than_days >= 0:
+            doomed.extend(
+                job for job in removable if job["age_days"] >= float(older_than_days)
+            )
+
+        chosen = {job["job_id"] for job in doomed}
+        if max_total_bytes is not None and max_total_bytes >= 0:
+            remaining = sum(job["size"] for job in jobs if job["job_id"] not in chosen)
+            for job in sorted(removable, key=lambda j: j["updated"]):
+                if remaining <= max_total_bytes:
+                    break
+                if job["job_id"] in chosen:
+                    continue
+                chosen.add(job["job_id"])
+                doomed.append(job)
+                remaining -= job["size"]
+
+        removed = []
+        freed = 0
+        for job in doomed:
+            if not dry_run:
+                try:
+                    freed += self.delete(job["job_id"])
+                except OSError as exc:  # noqa: BLE001
+                    logging.warning("Could not delete job %s: %s", job["job_id"], exc)
+                    continue
+            else:
+                freed += job["size"]
+            removed.append(job)
+
+        return {
+            "removed": removed,
+            "freed_bytes": int(freed),
+            "kept": len(jobs) - len(removed),
+            "dry_run": bool(dry_run),
+            "policy": {
+                "older_than_days": older_than_days,
+                "keep_latest": keep_latest,
+                "max_total_bytes": max_total_bytes,
+            },
+        }
+
+    def compact(self, job_id: str, *, dry_run: bool = False) -> dict:
+        """Drop intermediates a finished job no longer needs.
+
+        Once a captioned / hooked / effects render exists for a clip, the plain
+        trimmed cut and the silent vertical reframe that produced it are dead
+        weight. Source uploads, transcripts, manifests and every final render are
+        kept so the job still lists and publishes.
+        """
+        path = self.path_for(job_id)
+        removed = []
+        freed = 0
+        if not path.is_dir():
+            raise FileNotFoundError(str(path))
+
+        renders = set()
+        for child in path.iterdir():
+            if not child.is_file():
+                continue
+            match = _CLIP_RENDER_RE.match(child.name)
+            if match:
+                renders.add(int(match.group(1)))
+
+        targets = []
+        for child in path.iterdir():
+            if not child.is_file():
+                continue
+            if _TEMP_FILE_RE.match(child.name):
+                targets.append(child)
+                continue
+            match = _CLIP_PLAIN_RE.match(child.name)
+            if match and int(match.group(1)) in renders:
+                targets.append(child)
+
+        for target in targets:
+            try:
+                size = target.stat().st_size
+            except OSError:
+                continue
+            if not dry_run:
+                try:
+                    target.unlink()
+                except OSError as exc:  # noqa: BLE001
+                    logging.warning("Could not remove %s: %s", target, exc)
+                    continue
+            freed += size
+            removed.append({"name": target.name, "size": size})
+
+        return {"job_id": job_id, "removed": removed, "freed_bytes": int(freed),
+                "dry_run": bool(dry_run)}
