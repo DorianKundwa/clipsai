@@ -336,6 +336,48 @@ def _config_from_payload(
     return cfg.validate()
 
 
+def _workspace_roots(out_dir: Path) -> "dict[str, Path]":
+    """Folders whose non-job subdirectories count as campaign workspaces.
+
+    The output directory always qualifies (``outputs/<campaign>``); ``work`` holds
+    the scratch material behind those campaigns. ``CLIPSAI_WORKSPACE_DIRS`` adds
+    more, comma separated and relative to the repository root.
+    """
+    roots = {"outputs": out_dir, "work": BASE_DIR / "work"}
+    raw = os.environ.get("CLIPSAI_WORKSPACE_DIRS")
+    if raw:
+        for part in str(raw).split(","):
+            candidate = Path(part.strip())
+            if not str(candidate).strip() or str(candidate) == ".":
+                continue
+            resolved = candidate if candidate.is_absolute() else BASE_DIR / candidate
+            roots[candidate.name or str(len(roots))] = resolved
+    return roots
+
+
+def _retention_settings() -> dict:
+    """Job-folder retention from the environment (0 disables a rule).
+
+    Defaults keep a month of jobs and the newest 20 folders, which stops the
+    output directory from growing without bound on a busy machine.
+    """
+
+    def read(name: str, default, cast):
+        raw = os.environ.get(name)
+        if raw is None or str(raw).strip() == "":
+            return default
+        try:
+            return max(cast(str(raw).strip()), 0)
+        except ValueError:
+            return default
+
+    return {
+        "older_than_days": read("CLIPSAI_RETENTION_DAYS", 30.0, float),
+        "keep_latest": read("CLIPSAI_KEEP_JOBS", 20, int),
+        "max_total_gb": read("CLIPSAI_STORAGE_BUDGET_GB", 0.0, float),
+    }
+
+
 def _serialize_job(job, runtime_state: "dict | None" = None) -> dict:
     manifest = job.manifest()
     rows = job.clip_rows()
@@ -509,6 +551,7 @@ def create_app(
     env_file: "str | Path | None" = None,
     auth: "tuple[str, str] | None" = None,
     max_upload_bytes: int = MAX_MEDIA_BYTES,
+    workspace_dirs: "dict[str, str | Path] | None" = None,
 ) -> FastAPI:
     """Build the unified FastAPI application serving API routes and the web UI."""
     out_dir = Path(output_dir or DEFAULT_OUTPUT_DIR)
@@ -519,7 +562,14 @@ def create_app(
     )
     _refresh_env(env_path)
 
-    store = JobStore(out_dir)
+    store = JobStore(
+        out_dir,
+        workspaces=(
+            {key: Path(value) for key, value in workspace_dirs.items()}
+            if workspace_dirs is not None
+            else _workspace_roots(out_dir)
+        ),
+    )
     state_lock = threading.Lock()
     run_states: "dict[str, dict]" = {}
     subscribers: "dict[str, list[queue.Queue]]" = {}
@@ -1169,6 +1219,155 @@ def create_app(
             headers={"Cache-Control": "no-store"},
         )
 
+    # ------------------------------------------------------------------ #
+    # Storage: usage, deletion, retention
+    # ------------------------------------------------------------------ #
+
+    def _is_running(job_id: str) -> bool:
+        return bool(_get_state(job_id).get("running"))
+
+    def _auto_cleanup() -> None:
+        """Apply the retention policy once at startup."""
+        settings = _retention_settings()
+        older = settings["older_than_days"] or None
+        keep = settings["keep_latest"] or None
+        max_gb = settings["max_total_gb"] or 0.0
+        if older is None and keep is None and not max_gb:
+            return
+        try:
+            result = store.cleanup(
+                older_than_days=older,
+                keep_latest=keep,
+                max_total_bytes=int(max_gb * (1024 ** 3)) if max_gb else None,
+                is_running=_is_running,
+            )
+        except Exception:  # noqa: BLE001
+            logging.exception("Automatic storage cleanup failed")
+            return
+        if result["removed"]:
+            logging.info(
+                "Storage cleanup removed %d old job(s), freed %.1f MB",
+                len(result["removed"]),
+                result["freed_bytes"] / 1e6,
+            )
+
+    @app.get("/api/storage")
+    def api_storage() -> JSONResponse:
+        payload = store.usage()
+        for job in payload["jobs"]:
+            job["running"] = _is_running(job["job_id"])
+        payload["retention"] = _retention_settings()
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+    @app.delete("/api/pipeline/jobs/{job_id}")
+    def api_pipeline_delete_job(job_id: str, request: Request) -> JSONResponse:
+        _check_same_origin(request)
+        try:
+            path = store.path_for(job_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if _is_running(job_id):
+            return JSONResponse(
+                {"error": "Cannot delete a job while a stage is running."},
+                status_code=409,
+            )
+        if not path.is_dir():
+            return JSONResponse(
+                {"error": "Job '{}' not found.".format(job_id)}, status_code=404
+            )
+        freed = store.delete(job_id)
+        with state_lock:
+            run_states.pop(job_id, None)
+            subscribers.pop(job_id, None)
+        return JSONResponse(
+            {"deleted": job_id, "freed_bytes": freed},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.delete("/api/storage/workspaces/{root_key}/{name}")
+    def api_delete_workspace(root_key: str, name: str, request: Request) -> JSONResponse:
+        _check_same_origin(request)
+        try:
+            freed = store.delete_workspace(root_key, name)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except FileNotFoundError:
+            return JSONResponse(
+                {"error": "Workspace '{}' not found under '{}'.".format(name, root_key)},
+                status_code=404,
+            )
+        except OSError as exc:
+            return JSONResponse(
+                {"error": "Could not delete '{}': {}".format(name, exc)}, status_code=500
+            )
+        return JSONResponse(
+            {"deleted": name, "root": root_key, "freed_bytes": freed},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/pipeline/jobs/{job_id}/compact")
+    def api_pipeline_compact_job(job_id: str, request: Request) -> JSONResponse:
+        _check_same_origin(request)
+        if _is_running(job_id):
+            return JSONResponse(
+                {"error": "Cannot compact a job while a stage is running."},
+                status_code=409,
+            )
+        try:
+            result = store.compact(job_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except FileNotFoundError:
+            return JSONResponse(
+                {"error": "Job '{}' not found.".format(job_id)}, status_code=404
+            )
+        job = store.get(job_id)
+        if job is not None:
+            job._save_manifest()
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/storage/cleanup")
+    async def api_storage_cleanup(request: Request) -> JSONResponse:
+        _check_same_origin(request)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+
+        def _number(key: str, cast):
+            raw = body.get(key)
+            if raw is None or raw == "":
+                return None
+            try:
+                value = cast(raw)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Invalid {}.".format(key))
+            if value < 0:
+                raise HTTPException(status_code=400, detail="Invalid {}.".format(key))
+            return value
+
+        try:
+            older = _number("older_than_days", float)
+            keep = _number("keep_latest", int)
+            max_gb = _number("max_total_gb", float)
+        except HTTPException as exc:
+            return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+        result = store.cleanup(
+            older_than_days=older,
+            keep_latest=keep,
+            max_total_bytes=None if max_gb is None else int(max_gb * (1024 ** 3)),
+            dry_run=bool(body.get("dry_run")),
+            is_running=_is_running,
+        )
+        with state_lock:
+            for job in result["removed"]:
+                run_states.pop(job["job_id"], None)
+                subscribers.pop(job["job_id"], None)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
     @app.post("/api/pipeline/jobs")
     async def api_pipeline_create_job(request: Request) -> JSONResponse:
         _check_same_origin(request)
@@ -1509,5 +1708,7 @@ def create_app(
             "Gradio interface with <code>python app.py --gradio</code>.</p>",
             status_code=503,
         )
+
+    _auto_cleanup()
 
     return app
