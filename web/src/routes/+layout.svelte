@@ -10,7 +10,8 @@ const nav = [
 	{ href: '/pipeline', label: 'Pipeline' },
 	{ href: '/studio', label: 'Studio' },
 	{ href: '/exports', label: 'Exports' },
-	{ href: '/library', label: 'Library' }
+	{ href: '/library', label: 'Library' },
+	{ href: '/storage', label: 'Storage' }
 ];
 
 const isActive = (href: string) =>
