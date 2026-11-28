@@ -88,7 +88,12 @@ MODEL_SIZES = ["auto", "tiny", "base", "small", "medium", "large-v1", "large-v2"
 DEVICES = ["auto", "cpu", "cuda"]
 LANGUAGES = ["auto", "en", "fr", "de", "es", "it", "ja", "zh", "nl", "uk", "pt"]
 CUTOFF_POLICIES = ["high", "average", "low"]
-CAPTION_STYLES = ["bold", "clean", "lime", "pill", "oneword"]
+from clipsai.ai.hooks import HOOK_POSITIONS, HOOK_STYLES
+from clipsai.captions.captions import CAPTION_POSITIONS, CAPTION_PRESETS
+from clipsai.render import EXPORT_PROFILES, GRADE_NAMES, PAD_MODES
+from clipsai.typography import available_fonts
+
+CAPTION_STYLES = list(CAPTION_PRESETS)
 AI_LANGUAGES = [
     "en",
     "es",
@@ -312,10 +317,37 @@ def _config_from_payload(
         translate_to=str(
             pick("translate_to", base.translate_to if base else "off") or "off"
         ),
+        font=str(pick("font", base.font if base else "montserrat-extrabold")),
+        caption_size=int(pick("caption_size", base.caption_size if base else 0) or 0),
+        caption_position=str(
+            pick("caption_position", base.caption_position if base else "bottom")
+        ),
+        caption_pop=bool(
+            pick("caption_pop", base.caption_pop if base else False)
+        ),
         package=bool(pick("package", base.package if base else False)),
         hook=bool(pick("hook", base.hook if base else False)),
         thumbnail=bool(pick("thumbnail", base.thumbnail if base else False)),
         effects=bool(pick("effects", base.effects if base else False)),
+        hook_style=str(pick("hook_style", base.hook_style if base else "card")),
+        hook_position=str(
+            pick("hook_position", base.hook_position if base else "upper")
+        ),
+        hook_font=str(
+            pick("hook_font", base.hook_font if base else "montserrat-extrabold")
+        ),
+        hook_kicker=str(pick("hook_kicker", base.hook_kicker if base else "")),
+        hook_seconds=float(
+            pick("hook_seconds", base.hook_seconds if base else 4.0) or 4.0
+        ),
+        export_profile=str(
+            pick("export_profile", base.export_profile if base else "off") or "off"
+        ),
+        grade=str(pick("grade", base.grade if base else "none") or "none"),
+        punch_ins=bool(pick("punch_ins", base.punch_ins if base else False)),
+        source_crop=str(
+            pick("source_crop", base.source_crop if base else "") or ""
+        ),
         publish=bool(pick("publish", base.publish if base else False)),
         platforms=platforms,
         publish_caption=str(
@@ -459,6 +491,19 @@ def _serialize_job(job, runtime_state: "dict | None" = None) -> dict:
             }
         )
 
+    final = []
+    for idx, path in sorted(job.final.items()):
+        url = _file_url(job.id, job.root, path)
+        if url:
+            final.append(
+                {
+                    "index": idx,
+                    "name": Path(path).name,
+                    "url": url,
+                    "size": _file_size(path),
+                }
+            )
+
     source_url = _file_url(job.id, job.root, job.config.source_path)
     state = runtime_state or {}
     return {
@@ -488,6 +533,7 @@ def _serialize_job(job, runtime_state: "dict | None" = None) -> dict:
             "reframed": reframed,
             "captions": captions,
             "packages": packages,
+            "final": final,
             "published": manifest["artifacts"].get("published", []),
         },
         "running": bool(state.get("running", False)),
@@ -699,6 +745,19 @@ def create_app(
             "cutoff_policies": CUTOFF_POLICIES,
             "aspect_ratios": list(ASPECT_RATIOS),
             "caption_styles": CAPTION_STYLES,
+            "caption_positions": list(CAPTION_POSITIONS),
+            "fonts": [
+                {"key": face["key"], "label": face["label"], "family": face["family"]}
+                for face in available_fonts()
+            ],
+            "hook_styles": list(HOOK_STYLES),
+            "hook_positions": list(HOOK_POSITIONS),
+            "export_profiles": [
+                {"key": "off", "label": "Off — keep the current render"},
+                *[profile.as_dict() for profile in EXPORT_PROFILES.values()],
+            ],
+            "grades": list(GRADE_NAMES),
+            "pad_modes": list(PAD_MODES),
             "ai_languages": ["off"] + AI_LANGUAGES,
             "platforms": list(PLATFORMS),
             "tiktok_privacy": list(TIKTOK_PRIVACY_LEVELS),

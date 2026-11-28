@@ -240,6 +240,13 @@ def build_and_burn_captions(
     ass_path = out_prefix + ".ass"
     write_srt(cues, srt_path)
 
+    look = dict(
+        font=getattr(config, "font", None) or None,
+        font_size=int(getattr(config, "caption_size", 0) or 0) or None,
+        position=getattr(config, "caption_position", None) or None,
+        pop=getattr(config, "caption_pop", None),
+    )
+
     video_out = None
     if video_path:
         video_out = burn_captions(
@@ -247,10 +254,11 @@ def build_and_burn_captions(
             cues,
             out_prefix + ".mp4",
             preset=config.caption_preset,
+            **look,
         )
         # burn_captions writes the matching .ass next to the video
     else:
-        write_ass(cues, ass_path, preset=config.caption_preset)
+        write_ass(cues, ass_path, preset=config.caption_preset, **look)
 
     return {
         "video": video_out,

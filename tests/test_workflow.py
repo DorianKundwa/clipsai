@@ -226,6 +226,68 @@ def test_publish_stage_uses_trimmed_clip_and_manifest(
     ]
 
 
+def test_finish_stage_masters_clips_and_publish_uses_them(
+    tmp_path, sample_video, transcript_file, monkeypatch
+):
+    monkeypatch.setattr(
+        media, "find_clips", lambda transcription, config: [Clip(0.0, 2.0, 0, 10)]
+    )
+    calls = []
+
+    def fake_finish(video, out, profile, **kwargs):
+        calls.append({"video": video, "out": out, "profile": profile, **kwargs})
+        with open(out, "wb") as handle:
+            handle.write(b"master")
+        return out
+
+    monkeypatch.setattr("clipsai.render.finish_clip", fake_finish)
+    publisher = FakePublisher()
+    job = JobStore(tmp_path / "outputs").create(
+        PipelineConfig(
+            source_path=sample_video,
+            transcript_path=transcript_file,
+            top_n=1,
+            render_vertical=False,
+            export_profile="shorts",
+            grade="warm",
+            punch_ins=True,
+            source_crop="0,0.28,0,0",
+            publish=True,
+            platforms=("tiktok",),
+        ),
+        publish_client=publisher,
+    )
+    assert job.run("transcribe").ok is True
+    assert job.run("find_clips").ok is True
+    assert job.run("trim").ok is True
+
+    result = job.run("finish")
+    assert result.ok is True, result.error
+    assert job.final[0].endswith("clip_0_final.mp4")
+    assert calls[0]["profile"] == "shorts"
+    assert calls[0]["grade"] == "warm"
+    assert calls[0]["crop"].bottom == 0.28
+    assert calls[0]["punch_ins"] == [1.0]
+    assert job._best_video(0) == job.final[0]
+
+    assert job.run("publish").ok is True
+    assert publisher.calls[0]["path"] == job.final[0]
+
+    manifest = json.loads((job.root / "manifest.json").read_text(encoding="utf-8"))
+    assert "finish" in manifest["completed"]
+    assert manifest["artifacts"]["final"] == [job.final[0]]
+
+
+def test_finish_requires_a_profile(tmp_path, transcript_file):
+    job = JobStore(tmp_path / "outputs").create(
+        PipelineConfig(transcript_path=transcript_file)
+    )
+    job.completed = {"trim"}
+    result = job.run("finish")
+    assert result.ok is False
+    assert "export profile" in result.error
+
+
 def test_publish_without_a_key_fails_cleanly(
     tmp_path, sample_video, transcript_file, monkeypatch
 ):

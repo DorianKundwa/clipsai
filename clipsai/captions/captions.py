@@ -12,16 +12,25 @@ Example
 -------
 >>> from clipsai import Transcriber, build_cues, burn_captions
 >>> transcription = Transcriber().transcribe(audio_file_path="talk.mp4")
->>> cues = build_cues(transcription, start_time=12.0, end_time=42.0, preset="bold")
->>> burn_captions("clip.mp4", cues, "clip_captioned.mp4", preset="bold")
+>>> cues = build_cues(transcription, start_time=12.0, end_time=42.0, preset="kinetic")
+>>> burn_captions("clip.mp4", cues, "clip_captioned.mp4", preset="kinetic")
 
 Presets
 -------
 ``bold``     white caps, yellow active word, heavy outline (default)
+``kinetic``  the short-form look: Montserrat ExtraBold, 52 px, yellow active
+             word that pops in, tight 5-word lines
+``shorts``   bigger kinetic type for fast cuts
 ``clean``    sentence case, thin outline, no active-word highlight
 ``lime``     white caps, lime green active word
 ``pill``     white caps in a solid purple box
+``boxed``    black caps in a yellow box
+``impact``   Archivo Black caps, white on a thick black outline
+``editorial`` Noto Serif Bold, sentence case, quiet and documentary
 ``oneword``  one giant word at a time
+
+Every preset can be overridden per render (font, size, position, pop) from the
+Studio, so one job can mix a kinetic TikTok cut and a quieter YouTube cut.
 """
 
 # standard library imports
@@ -29,7 +38,10 @@ from __future__ import annotations
 
 import os
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+
+# local package imports
+from clipsai.typography import font_family, fonts_dir
 
 # ffmpeg return code of 0 means success
 SUCCESS = 0
@@ -40,6 +52,17 @@ BLACK = "&H00000000"
 YELLOW = "&H0000FFFF"
 LIME = "&H0000FFA3"
 PURPLE = "&H00ED3A7C"
+ORANGE = "&H00008CFF"
+
+#: Vertical anchor of a caption block -> ASS alignment (numpad layout).
+CAPTION_POSITIONS = {
+    "bottom": 2,
+    "center": 5,
+    "top": 8,
+}
+
+#: Default distance from the frame edge for each anchor, in 1080x1920 pixels.
+_POSITION_MARGIN = {"bottom": 110, "center": 0, "top": 120}
 
 
 class CaptionError(Exception):
@@ -50,14 +73,14 @@ class CaptionError(Exception):
 class CaptionPreset:
     """Visual style and line-breaking rules for a caption preset."""
 
-    font: str = "Arial"
-    font_size: int = 78
+    font: str = "Montserrat ExtraBold"
+    font_size: int = 72
     bold: bool = True
     primary_colour: str = WHITE
     outline_colour: str = BLACK
     back_colour: str = BLACK
     highlight_colour: "str | None" = YELLOW
-    outline: float = 4.0
+    outline: float = 4.5
     shadow: float = 0.0
     border_style: int = 1
     uppercase: bool = True
@@ -66,11 +89,38 @@ class CaptionPreset:
     max_duration: float = 4.0
     margin_v: int = 110
     spacing: float = 0.0
+    align: str = "bottom"
+    #: Scale the active word briefly, the "kinetic" pop. 1.0 disables it.
+    pop_scale: float = 1.0
+    pop_ms: int = 120
 
 
 CAPTION_PRESETS: "dict[str, CaptionPreset]" = {
     "bold": CaptionPreset(),
+    "kinetic": CaptionPreset(
+        font_size=52,
+        highlight_colour=YELLOW,
+        outline=4.0,
+        max_words=5,
+        max_chars=26,
+        max_duration=3.2,
+        margin_v=560,
+        pop_scale=1.12,
+        pop_ms=110,
+    ),
+    "shorts": CaptionPreset(
+        font_size=64,
+        highlight_colour=YELLOW,
+        outline=5.0,
+        max_words=4,
+        max_chars=22,
+        max_duration=2.8,
+        margin_v=620,
+        pop_scale=1.16,
+        pop_ms=90,
+    ),
     "clean": CaptionPreset(
+        font="Arial",
         font_size=64,
         bold=False,
         highlight_colour=None,
@@ -82,9 +132,9 @@ CAPTION_PRESETS: "dict[str, CaptionPreset]" = {
         margin_v=90,
     ),
     "lime": CaptionPreset(
-        font_size=74,
+        font_size=72,
         highlight_colour=LIME,
-        outline=4.0,
+        outline=4.5,
     ),
     "pill": CaptionPreset(
         border_style=3,
@@ -95,8 +145,42 @@ CAPTION_PRESETS: "dict[str, CaptionPreset]" = {
         shadow=0.0,
         margin_v=100,
     ),
+    "boxed": CaptionPreset(
+        font="Archivo Black",
+        font_size=56,
+        primary_colour=BLACK,
+        border_style=3,
+        outline_colour=YELLOW,
+        back_colour=YELLOW,
+        highlight_colour=None,
+        outline=12.0,
+        max_words=4,
+        max_chars=24,
+        margin_v=100,
+    ),
+    "impact": CaptionPreset(
+        font="Archivo Black",
+        font_size=68,
+        highlight_colour=None,
+        outline=6.0,
+        max_words=3,
+        max_chars=20,
+        margin_v=130,
+    ),
+    "editorial": CaptionPreset(
+        font="Noto Serif",
+        font_size=56,
+        highlight_colour=None,
+        outline=2.0,
+        shadow=2.0,
+        uppercase=False,
+        max_words=7,
+        max_chars=40,
+        max_duration=5.0,
+        margin_v=100,
+    ),
     "oneword": CaptionPreset(
-        font_size=130,
+        font_size=120,
         highlight_colour=None,
         outline=6.0,
         max_words=1,
@@ -145,6 +229,46 @@ def _resolve_preset(preset: "str | CaptionPreset") -> CaptionPreset:
             )
         )
     return CAPTION_PRESETS[key]
+
+
+def caption_preset_names() -> "tuple[str, ...]":
+    """Preset names in menu order."""
+    return tuple(CAPTION_PRESETS)
+
+
+def caption_preset(
+    preset: "str | CaptionPreset" = "bold",
+    *,
+    font: "str | None" = None,
+    font_size: "int | None" = None,
+    position: "str | None" = None,
+    pop: "bool | None" = None,
+) -> CaptionPreset:
+    """Resolve a preset and apply per-render overrides.
+
+    ``position`` moves the caption block (bottom / center / top) and swaps in
+    that anchor's default margin, unless the preset already chose one.
+    """
+    config = _resolve_preset(preset)
+    changes = {}
+    if font:
+        changes["font"] = font
+    if font_size:
+        changes["font_size"] = max(16, int(font_size))
+    if position:
+        key = str(position).strip().lower()
+        if key not in CAPTION_POSITIONS:
+            raise CaptionError(
+                "Unknown caption position '{}'. Choose one of: {}.".format(
+                    position, ", ".join(CAPTION_POSITIONS)
+                )
+            )
+        changes["align"] = key
+        if key != config.align:
+            changes["margin_v"] = _POSITION_MARGIN[key]
+    if pop is not None:
+        changes["pop_scale"] = 1.12 if pop else 1.0
+    return replace(config, **changes) if changes else config
 
 
 def _ends_sentence(text: str) -> bool:
@@ -280,6 +404,14 @@ def _inline_colour(colour: str) -> str:
     return "{\\c" + colour.strip().rstrip("&") + "&}"
 
 
+def _pop_tags(scale: float, milliseconds: int) -> str:
+    if scale <= 1.0:
+        return ""
+    return "{{\\fscx{scale}\\fscy{scale}\\t(0,{ms},\\fscx100\\fscy100)".format(
+        scale=int(round(scale * 100)), ms=int(milliseconds)
+    )
+
+
 def to_srt(cues: "list[CaptionCue]") -> str:
     """Render cues as an SRT subtitle document."""
     blocks = []
@@ -297,16 +429,25 @@ def to_ass(
     preset: "str | CaptionPreset" = "bold",
     width: int = 1080,
     height: int = 1920,
+    *,
+    font: "str | None" = None,
+    font_size: "int | None" = None,
+    position: "str | None" = None,
+    pop: "bool | None" = None,
 ) -> str:
     """Render cues as an ASS subtitle document sized for the target video."""
-    config = _resolve_preset(preset)
+    config = caption_preset(
+        preset, font=font, font_size=font_size, position=position, pop=pop
+    )
 
     # preset values are authored for a 1080x1920 canvas
     scale = float(height) / 1920.0
-    font_size = max(16, int(round(config.font_size * scale)))
+    size = max(12, int(round(config.font_size * scale)))
     outline = round(config.outline * scale, 2)
     shadow = round(config.shadow * scale, 2)
-    margin_v = max(8, int(round(config.margin_v * scale)))
+    margin_v = max(0, int(round(config.margin_v * scale)))
+    alignment = CAPTION_POSITIONS.get(config.align, 2)
+    family = font_family(config.font)
 
     header = [
         "[Script Info]",
@@ -327,10 +468,10 @@ def to_ass(
         (
             "Style: Default,{font},{size},{primary},{primary},{outline_colour},"
             "{back_colour},{bold},0,0,0,100,100,{spacing},0,{border_style},{outline},"
-            "{shadow},2,40,40,{margin_v},1"
+            "{shadow},{alignment},40,40,{margin_v},1"
         ).format(
-            font=config.font,
-            size=font_size,
+            font=family,
+            size=size,
             primary=config.primary_colour,
             outline_colour=config.outline_colour,
             back_colour=config.back_colour,
@@ -339,6 +480,7 @@ def to_ass(
             border_style=config.border_style,
             outline=outline,
             shadow=shadow,
+            alignment=alignment,
             margin_v=margin_v,
         ),
         "",
@@ -347,12 +489,14 @@ def to_ass(
         "Effect, Text",
     ]
 
+    pop_tags = _pop_tags(config.pop_scale, config.pop_ms)
     events = []
     for cue in cues:
         if not cue.words:
             continue
         highlight = config.highlight_colour
-        if highlight is None or len(cue.words) == 1:
+        active_word = highlight is not None or config.pop_scale > 1.0
+        if not active_word or len(cue.words) == 1:
             text = " ".join(_ass_text(w.text, config.uppercase) for w in cue.words)
             events.append(
                 "Dialogue: 0,{},{},Default,,0,0,0,,{}".format(
@@ -378,9 +522,10 @@ def to_ass(
                 rendered = _ass_text(token.text, config.uppercase)
                 if j == i:
                     rendered = (
-                        _inline_colour(highlight)
+                        (_inline_colour(highlight) if highlight else "")
+                        + (pop_tags + "}" if pop_tags else "")
                         + rendered
-                        + _inline_colour(config.primary_colour)
+                        + (_inline_colour(config.primary_colour) if highlight else "")
                     )
                 parts.append(rendered)
 
@@ -406,10 +551,26 @@ def write_ass(
     preset: "str | CaptionPreset" = "bold",
     width: int = 1080,
     height: int = 1920,
+    *,
+    font: "str | None" = None,
+    font_size: "int | None" = None,
+    position: "str | None" = None,
+    pop: "bool | None" = None,
 ) -> str:
     """Write cues to ``file_path`` as ASS and return the path."""
     with open(file_path, "w", encoding="utf-8-sig") as handle:
-        handle.write(to_ass(cues, preset=preset, width=width, height=height))
+        handle.write(
+            to_ass(
+                cues,
+                preset=preset,
+                width=width,
+                height=height,
+                font=font,
+                font_size=font_size,
+                position=position,
+                pop=pop,
+            )
+        )
     return file_path
 
 
@@ -441,11 +602,21 @@ def probe_video_size(video_file_path: str) -> "tuple[int, int]":
     )
 
 
-def _subtitles_filter(ass_file_path: str) -> str:
+def escape_filter_path(path: str) -> str:
+    """Escape a path for a ``subtitles=`` / ``ass=`` filter argument."""
     # ffmpeg filter paths need forward slashes and an escaped drive colon on Windows
-    path = os.path.abspath(ass_file_path).replace("\\", "/")
-    path = path.replace(":", "\\:").replace("'", "\\'")
-    return "subtitles=filename='{}'".format(path)
+    path = os.path.abspath(path).replace("\\", "/")
+    return path.replace(":", "\\:").replace("'", "\\'")
+
+
+def _subtitles_filter(ass_file_path: str, fontsdir: "str | None" = None) -> str:
+    parts = ["filename='{}'".format(escape_filter_path(ass_file_path))]
+    # Without fontsdir libass silently falls back to DejaVu for a bundled face
+    # and the burned captions do not match the previewed style.
+    directory = fontsdir if fontsdir is not None else fonts_dir()
+    if directory and os.path.isdir(directory):
+        parts.append("fontsdir='{}'".format(escape_filter_path(directory)))
+    return "subtitles=" + ":".join(parts)
 
 
 def burn_captions(
@@ -455,6 +626,13 @@ def burn_captions(
     preset: "str | CaptionPreset" = "bold",
     crf: "str | int" = "20",
     preset_ffmpeg: str = "veryfast",
+    *,
+    font: "str | None" = None,
+    font_size: "int | None" = None,
+    position: "str | None" = None,
+    pop: "bool | None" = None,
+    fontsdir: "str | None" = None,
+    audio_codec: str = "copy",
 ) -> str:
     """
     Burn cues onto a video with ffmpeg and write the result to ``output_file_path``.
@@ -471,7 +649,17 @@ def burn_captions(
 
     width, height = probe_video_size(video_file_path)
     ass_path = os.path.splitext(output_file_path)[0] + ".ass"
-    write_ass(cues, ass_path, preset=preset, width=width, height=height)
+    write_ass(
+        cues,
+        ass_path,
+        preset=preset,
+        width=width,
+        height=height,
+        font=font,
+        font_size=font_size,
+        position=position,
+        pop=pop,
+    )
 
     command = [
         "ffmpeg",
@@ -479,7 +667,7 @@ def burn_captions(
         "-i",
         video_file_path,
         "-vf",
-        _subtitles_filter(ass_path),
+        _subtitles_filter(ass_path, fontsdir=fontsdir),
         "-c:v",
         "libx264",
         "-crf",
@@ -487,11 +675,13 @@ def burn_captions(
         "-preset",
         preset_ffmpeg,
         "-c:a",
-        "copy",
+        audio_codec,
         "-movflags",
         "+faststart",
         output_file_path,
     ]
+    if audio_codec == "aac":
+        command[-4:-4] = ["-b:a", "192k", "-ar", "48000"]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != SUCCESS or not os.path.isfile(output_file_path):
         raise CaptionError(

@@ -32,6 +32,7 @@ STAGES = (
     "reframe",
     "captions",
     "package",
+    "finish",
     "publish",
 )
 
@@ -42,6 +43,7 @@ STAGE_LABELS = {
     "reframe": "Reframe to vertical",
     "captions": "Add captions",
     "package": "AI packaging",
+    "finish": "Master export",
     "publish": "Publish",
 }
 
@@ -52,6 +54,7 @@ REQUIRES = {
     "reframe": ("trim",),
     "captions": ("trim",),
     "package": ("find_clips",),
+    "finish": ("trim",),
     "publish": ("trim",),
 }
 
@@ -198,6 +201,7 @@ class PipelineJob:
         self.reframed_by_index: "dict[int, str]" = {}
         self.captions: "list[dict]" = []
         self.packages: "list[dict]" = []
+        self.final: "dict[int, str]" = {}
         self.published: "list[dict]" = []
         self.completed: "set[str]" = set()
         self.stage_state: "dict[str, dict]" = {}
@@ -224,6 +228,7 @@ class PipelineJob:
         self.reframed_by_index = {}
         self.captions = []
         self.packages = []
+        self.final = {}
         self.published = []
         self.completed = set()
         self.stage_state = {}
@@ -233,6 +238,8 @@ class PipelineJob:
         return self.clips[index]
 
     def _best_video(self, index: int) -> str:
+        if self.final.get(index):
+            return self.final[index]
         for group in (self.packages, self.captions, self.reframed):
             if group and isinstance(group[0], dict):
                 for item in group:
@@ -285,6 +292,8 @@ class PipelineJob:
             self.captions = []
         if "package" in cleared:
             self.packages = []
+        if "finish" in cleared:
+            self.final = {}
         if "publish" in cleared:
             self.published = []
 
@@ -389,6 +398,8 @@ class PipelineJob:
             order.append("captions")
         if self.config.package:
             order.append("package")
+        if str(self.config.export_profile or "off") != "off":
+            order.append("finish")
         if self.config.publish:
             order.append("publish")
 
@@ -566,7 +577,17 @@ class PipelineJob:
 
             if self.config.hook and hook_text and video:
                 hooked = self.root / "clip_{}_hook.mp4".format(index)
-                burn_hook(video, hook_text, str(hooked))
+                burn_hook(
+                    video,
+                    hook_text,
+                    str(hooked),
+                    style=self.config.hook_style,
+                    position=self.config.hook_position,
+                    font=self.config.hook_font,
+                    kicker=self.config.hook_kicker,
+                    start=0.0,
+                    end=float(self.config.hook_seconds),
+                )
                 record["hooked"] = str(hooked)
                 video = str(hooked)
 
@@ -603,6 +624,54 @@ class PipelineJob:
                 len(packages), " and thumbnails" if self.config.thumbnail else ""
             ),
             {"packages": [p["package"] for p in packages]},
+        )
+
+    def _stage_finish(self, progress) -> "tuple[str, dict]":
+        """Deliver each clip at a platform profile with normalized loudness."""
+        if str(self.config.export_profile or "off") == "off":
+            raise WorkflowError(
+                "Choose an export profile (Shorts, Reels, TikTok, YouTube or Square)."
+            )
+        if not self.selected:
+            raise WorkflowError("No clips are selected.")
+
+        from clipsai.render import finish_clip, parse_crop
+
+        crop = parse_crop(self.config.source_crop)
+        finals = {}
+        for index in self.selected:
+            video = self._best_video(index)
+            if not video or not os.path.isfile(video):
+                raise WorkflowError(
+                    "Clip {} has no rendered video to finish.".format(index)
+                )
+            clip = self._clip(index)
+            duration = float(clip.end_time) - float(clip.start_time)
+            punch_times = []
+            if self.config.punch_ins:
+                moment = 1.0
+                while moment < duration - 0.6 and len(punch_times) < 6:
+                    punch_times.append(round(moment, 2))
+                    moment += 2.5
+            out_path = self.root / "clip_{}_final.mp4".format(index)
+            finish_clip(
+                video,
+                str(out_path),
+                self.config.export_profile,
+                pad="blur",
+                grade=self.config.grade,
+                crop=crop,
+                punch_ins=punch_times,
+                preset="medium",
+            )
+            finals[index] = str(out_path)
+
+        self.final = finals
+        return (
+            "Mastered {} clip(s) to {}.".format(
+                len(finals), self.config.export_profile
+            ),
+            {"final": list(finals.values())},
         )
 
     def _stage_publish(self, progress) -> "tuple[str, dict]":
@@ -738,6 +807,7 @@ class PipelineJob:
                 "reframed": list(self.reframed),
                 "captions": self.captions,
                 "packages": [p.get("package", "") for p in self.packages],
+                "final": list(self.final.values()),
                 "published": [
                     {
                         "index": r.get("index"),

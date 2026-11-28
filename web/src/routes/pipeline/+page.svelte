@@ -68,6 +68,7 @@
 			reframed: VideoArtifact[];
 			captions: CaptionArtifact[];
 			packages: PackageArtifact[];
+			final: VideoArtifact[];
 			published: Array<Record<string, unknown>>;
 		};
 		running: boolean;
@@ -99,6 +100,13 @@
 		cutoff_policies: string[];
 		aspect_ratios: string[];
 		caption_styles: string[];
+		caption_positions: string[];
+		fonts: Array<{ key: string; label: string; family: string }>;
+		hook_styles: string[];
+		hook_positions: string[];
+		export_profiles: Array<{ key: string; label: string }>;
+		grades: string[];
+		pad_modes: string[];
 		ai_languages: string[];
 		platforms: string[];
 		tiktok_privacy: string[];
@@ -115,7 +123,36 @@
 		],
 		cutoff_policies: ['high', 'average', 'low'],
 		aspect_ratios: ['9:16', '3:4', '4:5', '1:1', '16:9'],
-		caption_styles: ['bold', 'clean', 'lime', 'pill', 'oneword'],
+		caption_styles: [
+			'bold',
+			'kinetic',
+			'shorts',
+			'clean',
+			'lime',
+			'pill',
+			'boxed',
+			'impact',
+			'editorial',
+			'oneword'
+		],
+		caption_positions: ['bottom', 'center', 'top'],
+		fonts: [
+			{ key: 'montserrat-extrabold', label: 'Montserrat ExtraBold', family: 'Montserrat ExtraBold' },
+			{ key: 'archivo-black', label: 'Archivo Black', family: 'Archivo Black' },
+			{ key: 'noto-serif', label: 'Noto Serif Bold', family: 'Noto Serif' }
+		],
+		hook_styles: ['card', 'box', 'dark', 'yellow', 'outline'],
+		hook_positions: ['top', 'upper', 'center', 'lower', 'bottom'],
+		export_profiles: [
+			{ key: 'off', label: 'Off — keep the current render' },
+			{ key: 'shorts', label: 'YouTube Shorts — 1080×1920 · 60 fps · 12 Mbps' },
+			{ key: 'reels', label: 'Instagram Reels — 1080×1920 · 30 fps · 10 Mbps' },
+			{ key: 'tiktok', label: 'TikTok — 1080×1920 · 30 fps · 10 Mbps' },
+			{ key: 'youtube', label: 'YouTube — 1920×1080 · 30 fps · 12 Mbps' },
+			{ key: 'square', label: 'Square feed — 1080×1080 · 30 fps · 8 Mbps' }
+		],
+		grades: ['none', 'warm', 'cool', 'punchy', 'film', 'mono'],
+		pad_modes: ['blur', 'crop', 'black'],
 		ai_languages: ['off', 'en', 'es', 'fr', 'de', 'pt', 'it', 'nl', 'ja', 'ko', 'zh'],
 		platforms: ['youtube', 'tiktok', 'instagram', 'facebook'],
 		tiktok_privacy: [
@@ -147,7 +184,19 @@
 	let keepTrimmed = $state(true);
 	let captions = $state(false);
 	let captionPreset = $state('bold');
+	let captionFont = $state('montserrat-extrabold');
+	let captionSize = $state(0);
+	let captionPosition = $state('bottom');
+	let captionPop = $state(false);
 	let translateTo = $state('off');
+	let exportProfile = $state('off');
+	let grade = $state('none');
+	let punchIns = $state(false);
+	let sourceCrop = $state('');
+	let hookStyle = $state('card');
+	let hookPosition = $state('upper');
+	let hookKicker = $state('');
+	let hookSeconds = $state(4);
 	let packageAi = $state(false);
 	let hook = $state(false);
 	let thumbnail = $state(false);
@@ -189,7 +238,20 @@
 			keep_trimmed: keepTrimmed,
 			captions,
 			caption_preset: captionPreset,
+			font: captionFont,
+			caption_size: Number(captionSize),
+			caption_position: captionPosition,
+			caption_pop: captionPop,
 			translate_to: translateTo,
+			export_profile: exportProfile,
+			grade,
+			punch_ins: punchIns,
+			source_crop: sourceCrop,
+			hook_style: hookStyle,
+			hook_position: hookPosition,
+			hook_kicker: hookKicker,
+			hook_font: captionFont,
+			hook_seconds: Number(hookSeconds),
 			package: packageAi,
 			hook,
 			thumbnail,
@@ -627,7 +689,64 @@
 								</select>
 							</label>
 						</div>
+						<div class="row-2">
+							<label class="stack">
+								<span class="label">Font</span>
+								<select class="select" bind:value={captionFont}>
+									{#each options.fonts as face (face.key)}
+										<option value={face.key}>{face.label}</option>
+									{/each}
+								</select>
+							</label>
+							<label class="stack">
+								<span class="label">Position</span>
+								<select class="select" bind:value={captionPosition}>
+									{#each options.caption_positions as position (position)}
+										<option value={position}>{position}</option>
+									{/each}
+								</select>
+							</label>
+						</div>
+						<div class="row-2">
+							<label class="stack">
+								<span class="label">Font size px (0 = preset)</span>
+								<div class="field"><input type="number" min="0" max="200" bind:value={captionSize} /></div>
+							</label>
+							<label class="check">
+								<input type="checkbox" bind:checked={captionPop} />
+								<span>Pop the spoken word</span>
+							</label>
+						</div>
 					{/if}
+
+					<hr class="sep-line" />
+
+					<div class="row-2">
+						<label class="stack">
+							<span class="label">Master export profile</span>
+							<select class="select" bind:value={exportProfile}>
+								{#each options.export_profiles as profile (profile.key)}
+									<option value={profile.key}>{profile.label}</option>
+								{/each}
+							</select>
+						</label>
+						<label class="stack">
+							<span class="label">Colour grade</span>
+							<select class="select" bind:value={grade}>
+								{#each options.grades as item (item)}
+									<option value={item}>{item}</option>
+								{/each}
+							</select>
+						</label>
+					</div>
+					<label class="check">
+						<input type="checkbox" bind:checked={punchIns} />
+						<span>Punch-in cadence (102% → 108%)</span>
+					</label>
+					<label class="stack">
+						<span class="label">Source crop — top,bottom,left,right fractions</span>
+						<input class="text-input" type="text" bind:value={sourceCrop} placeholder="0,0.28,0,0 removes a burned-in caption strip" />
+					</label>
 				</div>
 			</div>
 
@@ -643,8 +762,46 @@
 					</label>
 					<label class="check">
 						<input type="checkbox" bind:checked={hook} />
-						<span>Burn top hook banner</span>
+						<span>Burn the opening hook card</span>
 					</label>
+					{#if hook}
+						<div class="row-2">
+							<label class="stack">
+								<span class="label">Hook style</span>
+								<select class="select" bind:value={hookStyle}>
+									{#each options.hook_styles as style (style)}
+										<option value={style}>{style}</option>
+									{/each}
+								</select>
+							</label>
+							<label class="stack">
+								<span class="label">Position</span>
+								<select class="select" bind:value={hookPosition}>
+									{#each options.hook_positions as position (position)}
+										<option value={position}>{position}</option>
+									{/each}
+								</select>
+							</label>
+						</div>
+						<div class="row-2">
+							<label class="stack">
+								<span class="label">Hook font</span>
+								<select class="select" bind:value={captionFont}>
+									{#each options.fonts as face (face.key)}
+										<option value={face.key}>{face.label}</option>
+									{/each}
+								</select>
+							</label>
+							<label class="stack">
+								<span class="label">On screen (s)</span>
+								<div class="field"><input type="number" min="0.5" max="60" step="0.5" bind:value={hookSeconds} /></div>
+							</label>
+						</div>
+						<label class="stack">
+							<span class="label">Kicker (optional question above the hook)</span>
+							<input class="text-input" type="text" bind:value={hookKicker} />
+						</label>
+					{/if}
 					<label class="check">
 						<input type="checkbox" bind:checked={thumbnail} />
 						<span>Create 1280×720 thumbnail</span>
@@ -844,7 +1001,7 @@
 				</div>
 			{/if}
 
-			{#if job && (job.artifacts.trimmed.length > 0 || job.artifacts.reframed.length > 0 || job.artifacts.captions.length > 0 || job.artifacts.packages.length > 0 || job.artifacts.published.length > 0)}
+			{#if job && (job.artifacts.trimmed.length > 0 || job.artifacts.reframed.length > 0 || job.artifacts.captions.length > 0 || job.artifacts.final.length > 0 || job.artifacts.packages.length > 0 || job.artifacts.published.length > 0)}
 				<div class="panel">
 					<div class="panel-head">
 						<h2>Rendered clips & artifacts</h2>
@@ -855,7 +1012,7 @@
 						{/if}
 					</div>
 					<div class="panel-body artifact-grid">
-						{#each [...job.artifacts.reframed.map((a) => ({ ...a, tag: 'Vertical reframe' })), ...job.artifacts.trimmed.map((a) => ({ ...a, tag: 'Trimmed clip' }))] as item (item.url)}
+						{#each [...job.artifacts.final.map((a) => ({ ...a, tag: 'Master export' })), ...job.artifacts.reframed.map((a) => ({ ...a, tag: 'Vertical reframe' })), ...job.artifacts.trimmed.map((a) => ({ ...a, tag: 'Trimmed clip' }))] as item (item.url)}
 							<article class="artifact-card">
 								<div class="artifact-head">
 									<div>

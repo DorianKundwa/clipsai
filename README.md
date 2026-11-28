@@ -80,9 +80,40 @@ write_srt(cues, "/abs/path/to/clip.srt")
 burn_captions("/abs/path/to/clip.mp4", cues, "/abs/path/to/clip_captioned.mp4")
 ```
 
-Styles: `bold` (white caps, yellow active word), `clean`, `lime`, `pill`, `oneword`.
+Styles: `bold` (white caps, yellow active word), `kinetic` (the 52 px
+Montserrat ExtraBold short-form look), `shorts`, `clean`, `lime`, `pill`,
+`boxed`, `impact`, `editorial` and `oneword`. Any preset can be overridden for
+one render with a font, size, position (`bottom`/`center`/`top`) and word pop.
 The same features are available in the Studio UI (`python app.py`) as the
-caption stage, with preset and translation options.
+caption stage, with preset, font and translation options.
+
+### Fonts, hook cards and master exports
+
+Three Open Font License faces ship with the package (Montserrat ExtraBold,
+Archivo Black, Noto Serif Bold) alongside the common system faces, and libass
+receives their folder so burned captions match the previewed type.
+
+```python
+from clipsai import EXPORT_PROFILES, finish_clip, verify_output
+from clipsai.ai.hooks import render_hook_png
+from clipsai.typography import available_fonts
+
+render_hook_png("Coolest white boy since Mac Miller", style="card",
+                kicker="Who knew Ad-Rock's son could rap?").save("hook.png")
+
+finish_clip("clip.mp4", "master.mp4", "shorts", pad="blur",
+            grade="punchy", punch_ins=[1.0, 3.5], cues=cues,
+            caption_preset="kinetic", hook_png="hook.png", hook_seconds=4.0)
+
+verify_output("master.mp4", "shorts")["ok"]
+```
+
+Profiles cover Shorts (1080×1920 · 60 fps · 12 Mbps), Reels, TikTok, YouTube and
+square, all encoded with H.264 High, AAC 48 kHz and audio normalized to
+−14 LUFS. `pad="blur"` fills a mismatched frame with a blurred copy instead of
+black bars, `grade` applies a look, `source_crop` removes burned-in app captions
+or padded bands, and `verify_output` checks resolution, frame rate, codecs,
+duration and loudness. See [docs/editing-options.md](docs/editing-options.md).
 
 ### AI features (DeepSeek)
 
@@ -118,7 +149,10 @@ stages, and provides caption translation; every one of them is optional.
 
 `python app.py` opens a single **Pipeline** tab. Set the options once, then run a
 stage; every completed stage returns its files and the choices that make sense
-next (find clips, trim, reframe, captions, AI packaging, publish).
+next (find clips, trim, reframe, captions, AI packaging, master export, publish).
+The **Master & look** panel picks the caption font, size and position, a colour
+grade, the 102%→108% punch-in cadence, a source crop and the platform export
+profile; the hook card gets its own style, position, font, kicker and duration.
 
 - All processing lives in `clipsai.workflow` (`PipelineConfig`, `PipelineJob`,
   `StageResult`, `JobStore`). Each job writes to `outputs/<job_id>/` with a

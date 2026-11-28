@@ -45,7 +45,18 @@ def _transcription(words=WORDS, char_duration=0.08, gap=0.12):
 
 
 def test_preset_names():
-    assert set(CAPTION_PRESETS) == {"bold", "clean", "lime", "pill", "oneword"}
+    assert set(CAPTION_PRESETS) == {
+        "bold",
+        "kinetic",
+        "shorts",
+        "clean",
+        "lime",
+        "pill",
+        "boxed",
+        "impact",
+        "editorial",
+        "oneword",
+    }
 
 
 def test_build_cues_from_full_transcript():
@@ -96,7 +107,7 @@ def test_ass_highlights_active_word_and_escapes_braces():
     ass = to_ass(cues, preset="bold", width=1080, height=1920)
 
     assert "PlayResX: 1080" in ass
-    assert "Style: Default,Arial" in ass
+    assert "Style: Default,Montserrat ExtraBold" in ass
     assert "Dialogue: 0," in ass
     assert "\\c&H0000FFFF&" in ass  # yellow active word
     # literal braces in the text are escaped; only override blocks remain
@@ -109,4 +120,33 @@ def test_ass_scales_for_horizontal_video():
     ass = to_ass(build_cues(_transcription()), preset="bold", width=1920, height=1080)
     assert "PlayResY: 1080" in ass
     # font size is authored for 1920px tall video and scaled down
-    assert "Default,Arial,44," in ass
+    assert "Default,Montserrat ExtraBold,40," in ass
+
+
+def test_kinetic_preset_uses_the_campaign_type_and_pop():
+    ass = to_ass(build_cues(_transcription()), preset="kinetic")
+    assert "Montserrat ExtraBold,52," in ass
+    assert ",2,40,40,560,1" in ass  # bottom anchor, 560 px above the edge
+    assert "\\fscx112\\fscy112" in ass
+
+
+def test_caption_position_moves_the_block():
+    ass = to_ass(build_cues(_transcription()), preset="kinetic", position="top")
+    assert ",8,40,40,120,1" in ass
+
+
+def test_caption_look_overrides_apply_per_render():
+    ass = to_ass(
+        build_cues(_transcription()),
+        preset="editorial",
+        font="archivo-black",
+        font_size=42,
+        pop=True,
+    )
+    assert "Archivo Black,42," in ass
+    assert "\\fscx112" in ass
+
+
+def test_unknown_caption_position_raises():
+    with pytest.raises(CaptionError):
+        to_ass(build_cues(_transcription()), position="sideways")

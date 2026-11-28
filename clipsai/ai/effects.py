@@ -20,8 +20,13 @@ SUCCESS = 0
 EFFECT_LIMITS = {
     "zoom_in": {"zoom": True, "max_strength": 0.15, "default_strength": 0.10},
     "punch_in": {"zoom": True, "max_strength": 0.15, "default_strength": 0.09},
+    "zoom_out": {"zoom": True, "max_strength": 0.15, "default_strength": 0.10},
     "zoom_pulse": {"zoom": True, "max_strength": 0.10, "default_strength": 0.07},
     "color_pop": {"zoom": False, "max_strength": 1.0, "default_strength": 0.5},
+    "warm": {"zoom": False, "max_strength": 1.0, "default_strength": 0.5},
+    "cool": {"zoom": False, "max_strength": 1.0, "default_strength": 0.5},
+    "grain": {"zoom": False, "max_strength": 1.0, "default_strength": 0.35},
+    "shake": {"zoom": False, "max_strength": 1.0, "default_strength": 0.5},
     "bw_moment": {"zoom": False, "max_strength": 1.0, "default_strength": 1.0},
     "flash": {"zoom": False, "max_strength": 1.0, "default_strength": 1.0},
     "vignette": {"zoom": False, "max_strength": 1.0, "default_strength": 1.0},
@@ -40,11 +45,16 @@ Transcript of the clip ({language}):
 
 Clip duration: {duration:.2f} seconds.
 
-Pick 0-6 moments where a SMALL effect supports the edit. Allowed types:
+Pick 0-7 moments where a SMALL effect supports the edit. Allowed types:
 - "zoom_in": slow push in on a key sentence (strength 0.05-0.15)
 - "punch_in": instantly tighter framing for a punchline (strength 0.05-0.15)
+- "zoom_out": release the frame after tension (strength 0.05-0.15)
 - "zoom_pulse": quick in-and-out accent (strength 0.04-0.10)
 - "color_pop": boost contrast and saturation briefly (strength 0.2-1.0)
+- "warm": warm the colour balance for a nostalgic beat (strength 0.2-1.0)
+- "cool": cool the colour balance for a serious beat (strength 0.2-1.0)
+- "grain": film grain for a raw, documentary beat (strength 0.2-1.0)
+- "shake": a short camera shake on an impact (strength 0.3-1.0)
 - "bw_moment": black and white for a beat (strength 1.0)
 - "flash": one-frame brightness flash on a hit (strength 1.0)
 - "vignette": vignette for a serious or reflective beat (strength 1.0)
@@ -139,6 +149,10 @@ def _zoom_term(entry: dict, fps: float) -> str:
         return "{:.4f}*(1-abs((on-{:.1f})/{:.1f}))*{}".format(
             strength, mid, half, gate
         )
+    if entry["type"] == "zoom_out":
+        return "{:.4f}*(1-clip((on-{})/{},0,1))*{}".format(
+            strength, start_frame, span, gate
+        )
     return "{:.4f}*{}".format(strength, gate)
 
 
@@ -160,11 +174,39 @@ def build_filter_string(
     height = int(height or 1920)
 
     color_filters = []
+    prefix_filters = []
     zoom_terms = []
     for entry in applied:
         start, end, strength = entry["start"], entry["end"], entry["strength"]
         if EFFECT_LIMITS[entry["type"]]["zoom"]:
             zoom_terms.append(_zoom_term(entry, fps))
+        elif entry["type"] == "shake":
+            # A hand-held jolt: crop a little larger and slide the window on a
+            # sine wave, then restore the frame size for the layers after it.
+            amplitude = 0.006 + 0.014 * strength
+            prefix_filters.append(
+                "crop=w=iw*0.92:h=ih*0.92:"
+                "x='(iw-ow)/2+iw*{:.4f}*sin(2*PI*t*11)*between(t,{:.2f},{:.2f})':"
+                "y='(ih-oh)/2+ih*{:.4f}*sin(2*PI*t*7.7+1)*between(t,{:.2f},{:.2f})',"
+                "scale={}:{}".format(
+                    amplitude, start, end, amplitude, start, end, width, height
+                )
+            )
+        elif entry["type"] == "grain":
+            amount = max(2, int(round(8 + 30 * strength)))
+            color_filters.append(
+                "noise=alls={}:allf=t+u:enable='between(t,{:.2f},{:.2f})'".format(
+                    amount, start, end
+                )
+            )
+        elif entry["type"] in ("warm", "cool"):
+            sign = 1.0 if entry["type"] == "warm" else -1.0
+            amount = 0.12 * strength * sign
+            color_filters.append(
+                "colorbalance=rs={:.2f}:gs={:.2f}:bs={:.2f}:enable='between(t,{:.2f},{:.2f})'".format(
+                    amount * 0.5, amount * 0.15, -amount * 0.5, start, end
+                )
+            )
         elif entry["type"] == "color_pop":
             contrast = 1.0 + 0.15 * strength
             saturation = 1.0 + 0.6 * strength
@@ -191,7 +233,7 @@ def build_filter_string(
                 )
             )
 
-    parts = list(color_filters)
+    parts = prefix_filters + color_filters
     if zoom_terms:
         z_expression = "1+" + "+".join(zoom_terms)
         parts.append(
@@ -204,6 +246,43 @@ def build_filter_string(
     if not parts:
         return None, []
     return ",".join(parts), applied
+
+
+def build_punch_in_filter(
+    times,
+    fps: float = 60.0,
+    width: int = 1080,
+    height: int = 1920,
+    base: float = 1.02,
+    strength: float = 0.06,
+    hold: float = 2.5,
+) -> "str | None":
+    """The campaign punch-in cadence: 102% -> 108% on each beat.
+
+    ``times`` are seconds relative to the clip; each one starts a rapid push
+    from ``base`` to ``base + strength`` that holds for ``hold`` seconds. This is
+    the edit used on talking-head cuts, independent of the AI edit plan.
+    """
+    usable = sorted({round(float(t), 3) for t in (times or ()) if float(t) >= 0})
+    if not usable:
+        return None
+    fps = float(fps) if fps and fps > 0 else 30.0
+    terms = []
+    for moment in usable:
+        start_frame = int(round(moment * fps))
+        ramp = max(4.0, fps * 0.12)
+        hold_frames = max(2, int(round(hold * fps)))
+        gate = "between(on,{}, {})".format(start_frame, start_frame + hold_frames)
+        terms.append(
+            "{:.4f}*clip((on-{})/{:.1f},0,1)*{}".format(
+                strength, start_frame, ramp, gate
+            )
+        )
+    expression = "{:.4f}+".format(base) + "+".join(terms)
+    return (
+        "zoompan=z='{}':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2'"
+        ":d=1:fps={:g}:s={}x{}".format(expression, fps, int(width), int(height))
+    )
 
 
 def probe_video_info(video_file_path: str) -> "dict":

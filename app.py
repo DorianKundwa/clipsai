@@ -27,14 +27,26 @@ import gradio as gr
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = Path(os.environ.get("CLIPSAI_OUTPUT_DIR", str(BASE_DIR / "outputs")))
 
+from clipsai.ai.hooks import HOOK_POSITIONS, HOOK_STYLES
+from clipsai.captions.captions import CAPTION_POSITIONS, CAPTION_PRESETS
+from clipsai.render import EXPORT_PROFILES, GRADE_NAMES
+from clipsai.typography import available_fonts
+
 MODEL_SIZES = ["auto", "tiny", "base", "small", "medium", "large-v1", "large-v2"]
 DEVICES = ["auto", "cpu", "cuda"]
 LANGUAGES = ["auto", "en", "fr", "de", "es", "it", "ja", "zh", "nl", "uk", "pt"]
 SELECTION_METHODS = ["TextTiling (fast, local)", "DeepSeek AI"]
 CUTOFF_POLICIES = ["high", "average", "low"]
 ASPECT_RATIOS = ["9:16", "3:4", "4:5", "1:1", "16:9"]
-CAPTION_STYLES = ["bold", "clean", "lime", "pill", "oneword"]
-HOOK_STYLES = ["box", "dark", "yellow", "outline"]
+CAPTION_STYLES = list(CAPTION_PRESETS)
+CAPTION_POSITION_KEYS = list(CAPTION_POSITIONS)
+HOOK_STYLE_KEYS = list(HOOK_STYLES)
+HOOK_POSITION_KEYS = list(HOOK_POSITIONS)
+FONT_CHOICES = [(face["label"], face["key"]) for face in available_fonts()]
+EXPORT_CHOICES = [("Off — keep the current render", "off")] + [
+    (profile.label, profile.key) for profile in EXPORT_PROFILES.values()
+]
+GRADE_CHOICES = [(name, name) for name in GRADE_NAMES]
 AI_LANGUAGES = [
     "en", "es", "fr", "de", "pt", "it", "nl", "pl", "uk", "ru", "tr",
     "ar", "hi", "ja", "ko", "zh", "id", "vi",
@@ -170,6 +182,19 @@ def _make_config(
     tiktok_privacy,
     ai_generated,
     when,
+    caption_font="montserrat-extrabold",
+    caption_size=0,
+    caption_position="bottom",
+    caption_pop=False,
+    export_profile="off",
+    grade="none",
+    punch_ins=False,
+    source_crop="",
+    hook_style="card",
+    hook_position="upper",
+    hook_font="montserrat-extrabold",
+    hook_kicker="",
+    hook_seconds=4.0,
 ):
     from clipsai.workflow import PipelineConfig
 
@@ -192,10 +217,23 @@ def _make_config(
         captions=bool(captions),
         caption_preset=caption_preset,
         translate_to=translate_to or "off",
+        font=caption_font or "montserrat-extrabold",
+        caption_size=int(caption_size or 0),
+        caption_position=caption_position or "bottom",
+        caption_pop=bool(caption_pop),
         package=bool(packaging),
         hook=bool(hook),
         thumbnail=bool(thumbnail),
         effects=bool(effects),
+        hook_style=hook_style or "card",
+        hook_position=hook_position or "upper",
+        hook_font=hook_font or "montserrat-extrabold",
+        hook_kicker=hook_kicker or "",
+        hook_seconds=float(hook_seconds or 4.0),
+        export_profile=export_profile or "off",
+        grade=grade or "none",
+        punch_ins=bool(punch_ins),
+        source_crop=source_crop or "",
         publish=bool(publish),
         platforms=tuple(platforms or ()),
         publish_caption=publish_caption or "",
@@ -264,6 +302,7 @@ def _outputs(job, result=None):
     caption_files = [
         item["video"] or item["srt"] for item in job.captions if item.get("video") or item.get("srt")
     ]
+    final_files = [job.final[index] for index in sorted(job.final)]
     return (
         job.id,
         _status_markdown(job, result),
@@ -271,6 +310,7 @@ def _outputs(job, result=None):
         job.trimmed,
         job.reframed,
         caption_files,
+        final_files,
         package_rows,
         publish_rows,
         _next_update(job),
@@ -285,7 +325,9 @@ def run_step(
     min_dur, max_dur, top_n, cutoff, aspect, render_vertical, keep_trimmed, captions,
     caption_preset, translate_to, packaging, hook, thumbnail, effects, publish,
     platforms, publish_caption, youtube_title, youtube_format, tiktok_privacy,
-    ai_generated, when, progress=gr.Progress(),
+    ai_generated, when, caption_font, caption_size, caption_position, caption_pop,
+    export_profile, grade, punch_ins, source_crop, hook_style, hook_position,
+    hook_font, hook_kicker, hook_seconds, progress=gr.Progress(),
 ):
     try:
         from clipsai.workflow import STAGE_LABELS
@@ -296,6 +338,9 @@ def run_step(
             captions, caption_preset, translate_to, packaging, hook, thumbnail,
             effects, publish, platforms, publish_caption, youtube_title,
             youtube_format, tiktok_privacy, ai_generated, when,
+            caption_font, caption_size, caption_position, caption_pop,
+            export_profile, grade, punch_ins, source_crop, hook_style,
+            hook_position, hook_font, hook_kicker, hook_seconds,
         )
         job = _job_for(job_id, config)
 
@@ -322,7 +367,9 @@ def run_all(
     max_dur, top_n, cutoff, aspect, render_vertical, keep_trimmed, captions,
     caption_preset, translate_to, packaging, hook, thumbnail, effects, publish,
     platforms, publish_caption, youtube_title, youtube_format, tiktok_privacy,
-    ai_generated, when, progress=gr.Progress(),
+    ai_generated, when, caption_font, caption_size, caption_position, caption_pop,
+    export_profile, grade, punch_ins, source_crop, hook_style, hook_position,
+    hook_font, hook_kicker, hook_seconds, progress=gr.Progress(),
 ):
     try:
         config = _make_config(
@@ -331,6 +378,9 @@ def run_all(
             captions, caption_preset, translate_to, packaging, hook, thumbnail,
             effects, publish, platforms, publish_caption, youtube_title,
             youtube_format, tiktok_privacy, ai_generated, when,
+            caption_font, caption_size, caption_position, caption_pop,
+            export_profile, grade, punch_ins, source_crop, hook_style,
+            hook_position, hook_font, hook_kicker, hook_seconds,
         )
         job = _job_for(job_id, config)
         results = job.run_all(progress=progress)
@@ -358,6 +408,7 @@ def reset_job(job_id):
     return (
         "",
         "Started a fresh job. Run a stage to begin.",
+        [],
         [],
         [],
         [],
@@ -550,13 +601,73 @@ def build_ui() -> gr.Blocks:
                                 value="off",
                                 label="Translate captions (DeepSeek)",
                             )
+                            with gr.Row():
+                                p_caption_font = gr.Dropdown(
+                                    FONT_CHOICES,
+                                    value="montserrat-extrabold",
+                                    label="Caption font",
+                                )
+                                p_caption_position = gr.Dropdown(
+                                    CAPTION_POSITION_KEYS,
+                                    value="bottom",
+                                    label="Caption position",
+                                )
+                            with gr.Row():
+                                p_caption_size = gr.Number(
+                                    value=0,
+                                    label="Font size px (0 = preset)",
+                                    precision=0,
+                                )
+                                p_caption_pop = gr.Checkbox(
+                                    value=False, label="Pop the spoken word"
+                                )
 
-                        with gr.Accordion("4. Packaging & publishing", open=False):
+                        with gr.Accordion("4. Master & look", open=True):
+                            p_export_profile = gr.Dropdown(
+                                EXPORT_CHOICES,
+                                value="off",
+                                label="Master export profile",
+                            )
+                            p_grade = gr.Dropdown(
+                                GRADE_CHOICES, value="none", label="Colour grade"
+                            )
+                            p_punch_ins = gr.Checkbox(
+                                value=False, label="Punch-in cadence (102% → 108%)"
+                            )
+                            p_source_crop = gr.Textbox(
+                                value="",
+                                label="Source crop (top,bottom,left,right fractions)",
+                                placeholder="e.g. 0,0.28,0,0 removes a burned-in caption strip",
+                            )
+
+                        with gr.Accordion("5. Packaging & publishing", open=False):
                             p_packaging = gr.Checkbox(
                                 value=False,
                                 label="Generate AI packaging (hook, titles, thumbnails)",
                             )
                             p_hook = gr.Checkbox(value=False, label="Burn the hook")
+                            with gr.Row():
+                                p_hook_style = gr.Dropdown(
+                                    HOOK_STYLE_KEYS, value="card", label="Hook style"
+                                )
+                                p_hook_position = gr.Dropdown(
+                                    HOOK_POSITION_KEYS,
+                                    value="upper",
+                                    label="Hook position",
+                                )
+                            with gr.Row():
+                                p_hook_font = gr.Dropdown(
+                                    FONT_CHOICES,
+                                    value="montserrat-extrabold",
+                                    label="Hook font",
+                                )
+                                p_hook_seconds = gr.Number(
+                                    value=4, label="Hook on screen (s)", precision=1
+                                )
+                            p_hook_kicker = gr.Textbox(
+                                value="",
+                                label="Hook kicker (optional question above the hook)",
+                            )
                             p_thumbnail = gr.Checkbox(
                                 value=False, label="Create a thumbnail"
                             )
@@ -620,6 +731,11 @@ def build_ui() -> gr.Blocks:
                                 label="Captioned clips", file_count="multiple",
                                 interactive=False,
                             )
+                            final_files = gr.File(
+                                label="Mastered clips (platform profile)",
+                                file_count="multiple",
+                                interactive=False,
+                            )
                         with gr.Row():
                             package_table = gr.Dataframe(
                                 headers=PACKAGE_HEADERS, label="AI packaging",
@@ -636,11 +752,14 @@ def build_ui() -> gr.Blocks:
                     p_keep, p_captions, p_caption_preset, p_translate, p_packaging,
                     p_hook, p_thumbnail, p_effects, p_publish, p_platforms,
                     p_publish_caption, p_yt_title, p_yt_format, p_tt_privacy,
-                    p_ai_generated, p_when,
+                    p_ai_generated, p_when, p_caption_font, p_caption_size,
+                    p_caption_position, p_caption_pop, p_export_profile, p_grade,
+                    p_punch_ins, p_source_crop, p_hook_style, p_hook_position,
+                    p_hook_font, p_hook_kicker, p_hook_seconds,
                 ]
                 pipeline_outputs = [
                     job_state, status_md, clips_table, trimmed_files, vertical_files,
-                    caption_files, package_table, publish_table, next_step,
+                    caption_files, final_files, package_table, publish_table, next_step,
                 ]
 
                 run_step_btn.click(

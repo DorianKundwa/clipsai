@@ -50,6 +50,7 @@ setup(
         "Issues": "https://github.com/ClipsAI/clipsai/issues",
     },
     include_package_data=True,
+    package_data={"clipsai": ["fonts/*.ttf", "fonts/*.txt"]},
     extras_require={
         "dev": [
             "black",

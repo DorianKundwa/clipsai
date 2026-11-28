@@ -1,0 +1,2 @@
+include README.md
+recursive-include clipsai/fonts *.ttf *.txt

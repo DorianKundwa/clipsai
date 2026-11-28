@@ -46,12 +46,28 @@ class PipelineConfig:
     captions: bool = False
     caption_preset: str = "bold"
     translate_to: str = "off"
+    # look: fonts and caption placement (the campaign typography)
+    font: str = "montserrat-extrabold"
+    caption_size: int = 0
+    caption_position: str = "bottom"
+    caption_pop: bool = False
+
+    # master export
+    export_profile: str = "off"
+    grade: str = "none"
+    punch_ins: bool = False
+    source_crop: str = ""
 
     # packaging
     package: bool = False
     hook: bool = False
     thumbnail: bool = False
     effects: bool = False
+    hook_style: str = "card"
+    hook_position: str = "upper"
+    hook_font: str = "montserrat-extrabold"
+    hook_kicker: str = ""
+    hook_seconds: float = 4.0
 
     # publishing
     publish: bool = False
@@ -128,6 +144,61 @@ class PipelineConfig:
             self.translate_to
         ).strip():
             errors.append("Translation language is empty.")
+
+        if not str(self.font or "").strip():
+            errors.append("A caption font is required.")
+        try:
+            self.caption_size = int(self.caption_size or 0)
+            if not 0 <= self.caption_size <= 200:
+                errors.append("Caption size must be between 0 (preset) and 200.")
+        except (TypeError, ValueError):
+            errors.append("Caption size must be a whole number.")
+
+        from clipsai.captions.captions import CAPTION_POSITIONS
+
+        if self.caption_position not in CAPTION_POSITIONS:
+            errors.append(
+                "Caption position must be one of: {}.".format(
+                    ", ".join(CAPTION_POSITIONS)
+                )
+            )
+
+        from clipsai.ai.hooks import HOOK_POSITIONS, HOOK_STYLES
+        from clipsai.render import EXPORT_PROFILES, GRADE_NAMES, parse_crop, RenderError
+
+        if self.hook_style not in HOOK_STYLES:
+            errors.append(
+                "Hook style must be one of: {}.".format(", ".join(HOOK_STYLES))
+            )
+        if self.hook_position not in HOOK_POSITIONS:
+            errors.append(
+                "Hook position must be one of: {}.".format(
+                    ", ".join(HOOK_POSITIONS)
+                )
+            )
+        try:
+            self.hook_seconds = float(self.hook_seconds)
+            if not 0.5 <= self.hook_seconds <= 60:
+                errors.append("Hook duration must be between 0.5 and 60 seconds.")
+        except (TypeError, ValueError):
+            errors.append("Hook duration must be a number.")
+        if not str(self.hook_font or "").strip():
+            errors.append("A hook font is required.")
+
+        if self.export_profile not in ("off",) + tuple(EXPORT_PROFILES):
+            errors.append(
+                "Export profile must be 'off' or one of: {}.".format(
+                    ", ".join(EXPORT_PROFILES)
+                )
+            )
+        if self.grade not in GRADE_NAMES:
+            errors.append(
+                "Grade must be one of: {}.".format(", ".join(GRADE_NAMES))
+            )
+        try:
+            parse_crop(self.source_crop)
+        except RenderError as exc:
+            errors.append(str(exc))
 
         if self.publish:
             from clipsai.publish.models import TIKTOK_PRIVACY_LEVELS, validate_platforms
