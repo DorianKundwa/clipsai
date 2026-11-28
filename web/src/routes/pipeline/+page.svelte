@@ -195,6 +195,7 @@
 	let sourceCrop = $state('');
 	let hookStyle = $state('card');
 	let hookPosition = $state('upper');
+	let hookFont = $state('montserrat-extrabold');
 	let hookKicker = $state('');
 	let hookSeconds = $state(4);
 	let packageAi = $state(false);
@@ -250,7 +251,7 @@
 			hook_style: hookStyle,
 			hook_position: hookPosition,
 			hook_kicker: hookKicker,
-			hook_font: captionFont,
+			hook_font: hookFont,
 			hook_seconds: Number(hookSeconds),
 			package: packageAi,
 			hook,
@@ -786,7 +787,7 @@
 						<div class="row-2">
 							<label class="stack">
 								<span class="label">Hook font</span>
-								<select class="select" bind:value={captionFont}>
+								<select class="select" bind:value={hookFont}>
 									{#each options.fonts as face (face.key)}
 										<option value={face.key}>{face.label}</option>
 									{/each}
